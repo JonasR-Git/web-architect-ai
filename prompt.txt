@@ -1,0 +1,18 @@
+Role: Senior Frontend Developer
+Task: Implement this website pixel-perfectly based on the provided architecture files.
+
+## INPUTS (in this folder)
+1. 🎨 **Design_System.md**: The "Single Source of Truth" for visuals (Colors, Spacing, Typhography).
+2. 📋 **Implementation_Plan.md**: The step-by-step master plan.
+3. 📝 **content/** folder: Optimized text for every page.
+4. 🖼️ **assets/** folder: Images to be used.
+
+## RULES
+1. **Design Fidelity**: Follow `Design_System.md` STRICTLY. Do not invent new colors. Use the defined Tailwind variables.
+2. **Tech Stack**: Next.js 14 (App Router), Tailwind CSS, shadcn/ui.
+3. **Process**:
+   - Step 1: Initialize the project & Tailwind config (Phase 1).
+   - Step 2: Build the UI Components (Phase 2).
+   - Step 3: build the Pages using text from `content/` (Phase 3).
+
+Please analyze the **Design_System.md** first, then start immediately with **Phase 1 (Setup)**.

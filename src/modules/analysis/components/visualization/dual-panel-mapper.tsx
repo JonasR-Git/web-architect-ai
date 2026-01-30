@@ -16,21 +16,17 @@ import {
 import {
     ArrowRight, Check, Merge, Trash2, CornerDownRight, Plus, Save,
     RotateCcw, GripVertical, FileText, FolderOpen, X, Download, Sparkles, Loader2,
-    ArrowUpDown, Lock
+    ArrowUpDown, Lock, Layers, Zap, CheckCircle2
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { MappingValidator } from '@/modules/analysis/services/mapping-validator';
+import type { MappingValidationResult, SourcePage } from '@/types';
+import { ValidationModal } from './validation-modal';
 
 // ============================================================================
 // TYPES
 // ============================================================================
-
-interface SourcePage {
-    id: string;
-    url: string;
-    title?: string;
-    description?: string;
-}
 
 export interface SectionImage {
     src: string;
@@ -42,6 +38,7 @@ export interface TargetSlot {
     path: string;
     label: string;
     action: 'keep' | 'redirect' | 'merge' | 'delete';
+    type?: 'page' | 'layout'; // Page or Global Layout entry
     sourceIds: string[]; // Which sources are connected
     description?: string; // AI generated description/specs
     content_goals?: string[]; // AI generated content goals
@@ -54,10 +51,15 @@ export interface TargetSlot {
         content?: string;
         images?: SectionImage[];
     }[];
+    logos?: SectionImage[]; // Global assets for layouts
+    language?: string; // New: Language variant (e.g. 'de', 'en')
+    canonical?: string;
+    hreflangs?: { lang: string; url: string }[];
     // Iterative Workflow Fields
     user_prompt?: string;
     dependencies?: string[];
     dependencies_detected?: boolean;
+    sourceDetails?: any[]; // Enriched context for regeneration
     previousState?: TargetSlot;
     lastGeneratedAt?: number;
     lastModifiedAt?: number;
@@ -111,6 +113,7 @@ function DraggableSource({
     } : undefined;
 
     return (
+
         <div
             ref={setNodeRef}
             style={style}
@@ -131,12 +134,17 @@ function DraggableSource({
                 <GripVertical size={14} className="text-gray-700 mt-1 shrink-0 group-hover:text-gray-500 transition-colors" />
                 <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                        <FileText size={14} className={isConnected ? "text-emerald-500" : "text-gray-600"} />
+                        {source.type === 'cluster' ? (
+                            <Layers size={14} className={isConnected ? "text-emerald-500" : "text-amber-400"} />
+                        ) : (
+                            <FileText size={14} className={isConnected ? "text-emerald-500" : "text-gray-600"} />
+                        )}
                         <code className={cn(
                             "text-xs font-mono truncate block flex-1",
-                            isConnected ? "text-emerald-400" : "text-gray-300"
+                            isConnected ? "text-emerald-400" : "text-gray-300",
+                            source.type === 'cluster' && "text-amber-200"
                         )}>
-                            {new URL(source.url).pathname || '/'}
+                            {getPathFromUrl(source.url)}
                         </code>
                         {isConnected && (
                             <Check size={14} className="text-emerald-500 shrink-0" />
@@ -144,6 +152,16 @@ function DraggableSource({
                     </div>
                     {source.title && (
                         <p className="text-[11px] text-gray-500 line-clamp-2 leading-relaxed pl-6">{source.title}</p>
+                    )}
+
+                    {/* Cluster Badge */}
+                    {source.type === 'cluster' && (
+                        <div className="pl-6 mt-2">
+                            <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-[10px] text-amber-500 font-medium">
+                                <FileText size={10} />
+                                {source.count} Seiten
+                            </div>
+                        </div>
                     )}
                 </div>
             </div>
@@ -212,9 +230,11 @@ function DroppableTarget({
                 "flex flex-col min-h-[100px] border-dashed", // Use dashed for drop targets
                 isOver
                     ? "border-purple-500 bg-purple-500/10 scale-[1.01] shadow-[0_0_20px_-5px_rgba(168,85,247,0.3)]"
-                    : connectedSources.length > 0
-                        ? `border-${config.color}-500/30 bg-${config.color}-500/5`
-                        : "border-white/10"
+                    : target.type === 'layout' || target.path === 'layout'
+                        ? "border-purple-500/40 bg-purple-500/5"
+                        : connectedSources.length > 0
+                            ? `border-${config.color}-500/30 bg-${config.color}-500/5`
+                            : "border-white/10"
             )}
         >
             {/* Hover Indicator Dot Left */}
@@ -226,12 +246,14 @@ function DroppableTarget({
                     onClick={cycleAction}
                     className={cn(
                         "px-3 py-1 rounded-md text-[10px] font-bold uppercase flex items-center gap-1.5 transition-all shadow-sm",
-                        `bg-${config.color}-500/10 text-${config.color}-400 hover:bg-${config.color}-500/20 ring-1 ring-${config.color}-500/20`
+                        (target.type === 'layout' || target.path === 'layout')
+                            ? "bg-purple-500/20 text-purple-400 ring-1 ring-purple-500/30"
+                            : `bg-${config.color}-500/10 text-${config.color}-400 hover:bg-${config.color}-500/20 ring-1 ring-${config.color}-500/20`
                     )}
                     title="Klicken zum Ändern"
                 >
                     <ActionIcon size={12} />
-                    {config.label}
+                    {(target.type === 'layout' || target.path === 'layout') ? "Global Layout" : config.label}
                 </button>
 
                 {/* Path Input/Display */}
@@ -295,7 +317,7 @@ function DroppableTarget({
                         <div key={source.id} className="flex items-center gap-2 px-2 py-1.5 rounded bg-black/20 border border-white/5 text-[11px] text-gray-400 group/item">
                             <CornerDownRight size={10} className="text-gray-600" />
                             <span className="font-mono truncate flex-1 text-gray-300">
-                                {new URL(source.url).pathname}
+                                {getPathFromUrl(source.url)}
                             </span>
                             <button
                                 onClick={() => onDisconnect(target.id, source.id)}
@@ -471,16 +493,15 @@ function ConnectionLines({
     );
 }
 
-// Helper to extract normalized path
 const getPathFromUrl = (url: string) => {
-    if (!url) return '';
-    let path = url;
+    if (!url) return '/';
     try {
-        path = new URL(url).pathname;
+        // If it starts with /, it's already a path
+        if (url.startsWith('/')) return url;
+        return new URL(url).pathname;
     } catch {
-        // Already relative or invalid
+        return url; // Fallback to original string if parsing fails
     }
-    return path.replace(/\/$/, "") || '/';
 };
 
 // ============================================================================
@@ -494,6 +515,14 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
     const [isGenerating, setIsGenerating] = useState(false);
     const [hoveredItem, setHoveredItem] = useState<string | null>(null);
     const [isStrictMode, setIsStrictMode] = useState(false);
+    const [validationResult, setValidationResult] = useState<MappingValidationResult | null>(null);
+    const [showValidationModal, setShowValidationModal] = useState(false);
+
+    // Real-time validation
+    useEffect(() => {
+        const result = MappingValidator.validate(sources, targets);
+        setValidationResult(result);
+    }, [sources, targets]);
 
     // Initial Audit to fix incorrect statuses
     useEffect(() => {
@@ -713,9 +742,62 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
     }, []);
 
     const handleSave = useCallback(() => {
+        // Check validation before saving
+        if (validationResult && !validationResult.isComplete) {
+            setShowValidationModal(true);
+            return;
+        }
         onSave?.(targets);
         setHasChanges(false);
+    }, [targets, onSave, validationResult]);
+
+    const handleForceSave = useCallback(() => {
+        onSave?.(targets);
+        setHasChanges(false);
+        setShowValidationModal(false);
     }, [targets, onSave]);
+
+    const handleAutoMapRemaining = useCallback(() => {
+        if (!validationResult) return;
+
+        const suggestions = MappingValidator.generateAutoMappingSuggestions(
+            validationResult.unmappedSources,
+            targets
+        );
+
+        // Separate: assign to existing targets vs create new targets
+        const assignToExisting = suggestions.filter(s => s.existingTargetId);
+        const createNew = suggestions.filter(s => !s.existingTargetId);
+
+        setTargets(prev => {
+            let updated = [...prev];
+
+            // Add sources to existing targets
+            assignToExisting.forEach(sug => {
+                const idx = updated.findIndex(t => t.id === sug.existingTargetId);
+                if (idx >= 0 && !updated[idx].sourceIds.includes(sug.sourceId)) {
+                    updated[idx] = {
+                        ...updated[idx],
+                        sourceIds: [...updated[idx].sourceIds, sug.sourceId]
+                    };
+                }
+            });
+
+            // Create new targets for unmatched sources
+            const newTargets: TargetSlot[] = createNew.map(sug => ({
+                id: `target-auto-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                path: sug.suggestedPath,
+                label: sug.suggestedPath,
+                action: sug.action,
+                sourceIds: [sug.sourceId],
+                description: sug.reason,
+                type: 'page'
+            }));
+
+            return [...updated, ...newTargets];
+        });
+        setHasChanges(true);
+    }, [validationResult, targets]);
 
     const handleReset = useCallback(() => {
         setTargets(initialTargets || []);
@@ -730,6 +812,7 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                     old_url: source?.url,
                     new_path: t.path,
                     action: t.action,
+                    type: t.type,
                     description: t.description,
                     content_goals: t.content_goals
                 };
@@ -740,6 +823,44 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
         const a = document.createElement('a');
         a.href = url;
         a.download = 'migration-mapping.json';
+        a.click();
+    }, [targets, sources]);
+
+    const handleDownloadSources = useCallback(() => {
+        const data = sources.map(s => ({
+            id: s.id,
+            url: s.url,
+            title: s.title,
+            type: s.type,
+            count: s.count,
+            mapped: connectedSourceIds.has(s.id)
+        }));
+        const blob = new Blob([JSON.stringify({ sources: data, total: data.length }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'source-pages.json';
+        a.click();
+    }, [sources, connectedSourceIds]);
+
+    const handleDownloadTargets = useCallback(() => {
+        const data = targets.map(t => ({
+            id: t.id,
+            path: t.path,
+            action: t.action,
+            type: t.type,
+            description: t.description,
+            sourceCount: t.sourceIds.length,
+            sources: t.sourceIds.map(sId => {
+                const src = sources.find(s => s.id === sId);
+                return src ? { id: src.id, url: src.url, title: src.title } : { id: sId };
+            })
+        }));
+        const blob = new Blob([JSON.stringify({ targets: data, total: data.length }, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'target-pages.json';
         a.click();
     }, [targets, sources]);
 
@@ -767,9 +888,32 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                     <div className="flex items-center gap-4">
                         <h3 className="text-base font-bold text-white tracking-tight">Seiten-Migration & Planung</h3>
                         <div className="h-4 w-px bg-white/10" />
-                        <span className="text-xs text-gray-500 font-mono">
-                            {connectedSourceIds.size} / {sources.length} zugewiesen
-                        </span>
+
+                        {/* Progress Bar */}
+                        <div className="flex items-center gap-3">
+                            <div className="w-48 h-2 bg-white/5 rounded-full overflow-hidden">
+                                <div
+                                    className={cn(
+                                        "h-full transition-all",
+                                        validationResult?.isComplete ? "bg-emerald-500" : "bg-amber-500"
+                                    )}
+                                    style={{ width: `${validationResult?.coveragePercentage || 0}%` }}
+                                />
+                            </div>
+                            <span className="text-xs font-mono text-gray-500">
+                                {validationResult?.mappedSources || 0} / {validationResult?.totalSources || 0}
+                            </span>
+                            {validationResult?.isComplete ? (
+                                <CheckCircle2 size={16} className="text-emerald-500" />
+                            ) : (
+                                validationResult && validationResult.unmappedSources.length > 0 && (
+                                    <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-400 font-bold">
+                                        {validationResult.unmappedSources.length} OFFEN
+                                    </span>
+                                )
+                            )}
+                        </div>
+
                         {hasChanges && (
                             <span className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-500 border border-amber-500/20 animate-pulse">
                                 Änderungen aktiv
@@ -815,6 +959,18 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                             </Button>
                         )}
 
+                        {/* Auto-Map Button */}
+                        {validationResult && !validationResult.isComplete && (
+                            <Button
+                                size="sm"
+                                onClick={handleAutoMapRemaining}
+                                className="h-8 text-xs bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 mr-2"
+                            >
+                                <Zap size={14} className="mr-2" />
+                                Auto-Map ({validationResult.unmappedSources.length})
+                            </Button>
+                        )}
+
                         <Button size="sm" variant="ghost" onClick={handleExport} className="h-8 text-xs text-gray-400">
                             <Download size={14} className="mr-2" /> Export
                         </Button>
@@ -840,11 +996,16 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                         <div className="px-5 py-3 border-b border-white/5 bg-[#030304]/80 backdrop-blur-sm z-30">
                             <h4 className="h-7 text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center justify-between">
                                 <span className="flex items-center gap-2"><FolderOpen size={14} /> Quellseiten (Ist-Zustand)</span>
-                                {unconnectedCount > 0 && (
-                                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-white">
-                                        {unconnectedCount} offen
-                                    </span>
-                                )}
+                                <div className="flex items-center gap-2">
+                                    {unconnectedCount > 0 && (
+                                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-white/10 text-white">
+                                            {unconnectedCount} offen
+                                        </span>
+                                    )}
+                                    <button onClick={handleDownloadSources} className="text-gray-500 hover:text-white transition-colors" title="Quellseiten herunterladen">
+                                        <Download size={12} />
+                                    </button>
+                                </div>
                             </h4>
                         </div>
                         <div className="flex-1 p-5 space-y-3 overflow-y-auto custom-scrollbar">
@@ -866,6 +1027,9 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                             <div className="flex items-center justify-between">
                                 <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider flex items-center gap-2">
                                     <FileText size={14} /> Zielstruktur (Soll-Zustand)
+                                    <button onClick={handleDownloadTargets} className="text-gray-500 hover:text-white transition-colors" title="Zielseiten herunterladen">
+                                        <Download size={12} />
+                                    </button>
                                 </h4>
                                 <Button size="sm" variant="ghost" onClick={handleAddTarget} className="h-7 text-xs text-blue-400 hover:bg-blue-500/10 hover:text-blue-300">
                                     <Plus size={14} className="mr-1.5" /> Neues Ziel
@@ -911,12 +1075,26 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
                         <div className="flex items-center gap-2 text-emerald-400">
                             <FileText size={14} />
                             <code className="text-xs font-mono font-bold">
-                                {new URL(activeSource.url).pathname}
+                                {getPathFromUrl(activeSource.url)}
                             </code>
                         </div>
                     </div>
                 )}
             </DragOverlay>
+
+            {/* Validation Modal */}
+            {validationResult && (
+                <ValidationModal
+                    isOpen={showValidationModal}
+                    validation={validationResult}
+                    onClose={() => setShowValidationModal(false)}
+                    onAutoFix={() => {
+                        handleAutoMapRemaining();
+                        setShowValidationModal(false);
+                    }}
+                    onForceSave={handleForceSave}
+                />
+            )}
         </DndContext>
     );
 }

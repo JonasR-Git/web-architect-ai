@@ -1,6 +1,14 @@
 import { Page } from 'puppeteer';
-import { SiteNode } from '@/types';
+import { SiteNode, DesignSystemColors, ColorAnalysis } from '@/types';
 import * as cheerio from 'cheerio';
+import { cleanHtmlForAI } from '@/modules/core/utils/cleaning';
+import { getCrawlerConfig } from './config';
+import { ImageColorAnalyzer } from '../services/image-color-analyzer';
+import { FormAnalyzer } from '../services/form-analyzer';
+import { LinkAnalyzer } from '../services/link-analyzer';
+import { DesignSystemExtractor } from '../services/design-system-extractor';
+import { ContentTypeDetector } from '../services/content-type-detector';
+import { MediaAnalyzer } from '../services/media-analyzer';
 
 // --- ADVANCED IMAGE INTELLIGENCE: Role Types ---
 type ImageRole =
@@ -18,6 +26,7 @@ type ImageRole =
     | 'award-badge'       // NEW: Awards, certifications, badges
     | 'location-photo'    // NEW: Venue, location imagery
     | 'cta-image'         // NEW: Call-to-action backgrounds
+    | 'blog-thumbnail'    // NEW: Blog/article preview images
     | 'decoration'
     | 'content'
     | 'unknown';
@@ -40,6 +49,14 @@ interface ClassifiedImage {
     };
     // NEW: Source page context
     sourcePageUrl?: string;
+    // NEW: Color analysis for design system extraction
+    colorAnalysis?: ColorAnalysis;
+    // NEW: Dimensions for size-based heuristics & duplicate detection
+    width?: number;
+    height?: number;
+    // NEW: Duplicate management (if this is a smaller version of another image)
+    masterImage?: string; // src of the larger version
+    variants?: string[];  // srcs of smaller versions (if this is the master)
 }
 
 // --- PATH-BASED ROLE DETECTION (Highest Priority) ---
@@ -89,7 +106,14 @@ const PATH_ROLE_PATTERNS: Array<{ pattern: RegExp; role: ImageRole; confidence: 
     { pattern: /\/products?\//i, role: 'product', confidence: 95, hint: 'ProductGrid' },
     { pattern: /\/produkte?\//i, role: 'product', confidence: 95, hint: 'ProductGrid' },
     { pattern: /\/shop\//i, role: 'product', confidence: 90, hint: 'ShopGrid' },
-    { pattern: /\/artikel\//i, role: 'product', confidence: 85, hint: 'ProductGrid' },
+
+    // Blog/Article paths (NEW)
+    { pattern: /\/blog[\/\-_]/i, role: 'blog-thumbnail', confidence: 90, hint: 'BlogGrid' },
+    { pattern: /\/posts?[\/\-_]/i, role: 'blog-thumbnail', confidence: 85, hint: 'BlogGrid' },
+    { pattern: /\/artikel[\/\-_]/i, role: 'blog-thumbnail', confidence: 85, hint: 'ArticleGrid' },
+    { pattern: /\/news[\/\-_]/i, role: 'blog-thumbnail', confidence: 85, hint: 'NewsGrid' },
+    { pattern: /\/aktuelles[\/\-_]/i, role: 'blog-thumbnail', confidence: 85, hint: 'NewsGrid' },
+    { pattern: /\/beitr[aä]ge?\//i, role: 'blog-thumbnail', confidence: 85, hint: 'BlogGrid' },
 
     // Award/Badge paths
     { pattern: /\/awards?\//i, role: 'award-badge', confidence: 95, hint: 'AwardsSection' },
@@ -142,6 +166,9 @@ const CSS_CONTEXT_PATTERNS: Array<{ pattern: RegExp; role: ImageRole; confidence
 
     // Award contexts
     { pattern: /award|badge|certif|auszeichnung|siegel|zertifikat/i, role: 'award-badge', confidence: 80, hint: 'AwardsSection' },
+
+    // Blog/Article contexts (NEW)
+    { pattern: /blog|article|post|news|aktuelles|beitrag|entry/i, role: 'blog-thumbnail', confidence: 75, hint: 'BlogSection' },
 ];
 
 // --- COMPREHENSIVE ROLE CLASSIFICATION ---
@@ -194,6 +221,9 @@ function classifyImageRole(
     if (pageUrlLower.includes('/sponsor') || pageUrlLower.includes('/partner')) {
         urlContextRole = 'sponsor-logo';
         urlContextConfidence = 70;
+    } else if (pageUrlLower.includes('/blog') || pageUrlLower.includes('/post') || pageUrlLower.includes('/artikel') || pageUrlLower.includes('/news')) {
+        urlContextRole = 'blog-thumbnail';
+        urlContextConfidence = 75;
     } else if (pageUrlLower.includes('/gallery') || pageUrlLower.includes('/galerie')) {
         urlContextRole = 'gallery';
         urlContextConfidence = 70;
@@ -217,7 +247,7 @@ function classifyImageRole(
         }
     }
 
-    // --- PRIORITY 5: Alt Text Analysis ---
+    // --- PRIORITY 5: Alt Text & Filename Analysis ---
     if (altLower.match(/logo|brand|marke/)) {
         return { role: 'logo', confidence: 60, componentHint: 'Navigation' };
     }
@@ -229,6 +259,12 @@ function classifyImageRole(
     }
     if (altLower.match(/gallery|galerie|foto|bild|impression/)) {
         return { role: 'gallery', confidence: 60, componentHint: 'GalleryGrid' };
+    }
+
+    // NEW: Blog thumbnail detection via filename
+    if (srcLower.match(/^(thumb|thumbnail|preview|featured)[-_]/i) ||
+        srcLower.match(/[-_](thumb|thumbnail|preview|featured)\./i)) {
+        return { role: 'blog-thumbnail', confidence: 75, componentHint: 'BlogGrid' };
     }
 
     // --- PRIORITY 6: URL Context Fallback ---
@@ -378,8 +414,8 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
     // Aggregation containers
     let fullWordCount = 0;
     const allImages: ClassifiedImage[] = [];
-    const allLinks: { text: string; href: string; ariaLabel?: string }[] = [];
-    const allForms: { id?: string; label?: string; hasLabel: boolean; type?: string }[] = [];
+    const allLinks: any[] = []; // Will be replaced with LinkAnalysis[] after analysis
+    const allForms: any[] = []; // Will be replaced with FormAnalysis[] after analysis
     let aggregatedText = '';
 
     // Process ALL frames (including main frame)
@@ -388,30 +424,71 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
 
     // We'll use the main frame for metadata
     const mainContent = await page.content();
-    const $main = cheerio.load(mainContent);
 
-    // Metadata (Keep from main frame)
-    const title = $main('title').text() || '';
-    const description = $main('meta[name="description"]').attr('content') || '';
-    const ogImage = $main('meta[property="og:image"]').attr('content');
-    const canonical = $main('link[rel="canonical"]').attr('href');
-    const robots = $main('meta[name="robots"]').attr('content');
-    const viewport = $main('meta[name="viewport"]').attr('content');
-    const lang = $main('html').attr('lang');
-    const charset = $main('meta[charset]').attr('charset') || $main('meta[http-equiv="Content-Type"]').attr('content');
+    // Metadata (Keep from main frame - RAW)
+    const $raw = cheerio.load(mainContent);
+    const title = $raw('title').text() || '';
+    const description = $raw('meta[name="description"]').attr('content') || '';
+    const ogImage = $raw('meta[property="og:image"]').attr('content');
+    const canonical = $raw('link[rel="canonical"]').attr('href');
+    const robots = $raw('meta[name="robots"]').attr('content');
+    const viewport = $raw('meta[name="viewport"]').attr('content');
+    let lang = $raw('html').attr('lang');
+
+    // Extract Hreflang Tags (Critical for Concept Mapping)
+    const hreflangs: { lang: string; href: string }[] = [];
+    $raw('link[rel="alternate"][hreflang]').each((_, el) => {
+        const hLang = $raw(el).attr('hreflang');
+        const hHref = $raw(el).attr('href');
+        if (hLang && hHref) {
+            hreflangs.push({ lang: hLang, href: hHref });
+        }
+    });
+
+    // Fallback: URL-based language detection (e.g. /de/, /en/)
+    if (!lang) {
+        const urlObj = new URL(url);
+        const firstSegment = urlObj.pathname.split('/')[1]; // ['', 'de', '...']
+        if (firstSegment && /^[a-z]{2}$/i.test(firstSegment)) {
+            lang = firstSegment.toLowerCase();
+        }
+    }
+    const charset = $raw('meta[charset]').attr('charset') || $raw('meta[http-equiv="Content-Type"]').attr('content');
 
     const social = {
-        ogTitle: $main('meta[property="og:title"]').attr('content'),
-        ogDescription: $main('meta[property="og:description"]').attr('content'),
-        twitterCard: $main('meta[name="twitter:card"]').attr('content'),
-        twitterSite: $main('meta[name="twitter:site"]').attr('content'),
+        ogTitle: $raw('meta[property="og:title"]').attr('content'),
+        ogDescription: $raw('meta[property="og:description"]').attr('content'),
+        twitterCard: $raw('meta[name="twitter:card"]').attr('content'),
+        twitterSite: $raw('meta[name="twitter:site"]').attr('content'),
     };
+
+    // --- CLEANING PHASE ---
+    // For structural analysis, we want a clean DOM without hydration bloat
+    const cleanContent = cleanHtmlForAI(mainContent, {
+        removeScripts: true,
+        removeStyles: true,
+        removeComments: true,
+        removeEmptyContainers: true,
+        simplifyAttributes: true,
+        extractNextData: true
+    });
+
+    // Use CLEANED content for main analysis
+    const $main = cheerio.load(cleanContent);
+
 
     // Iterate Frames
     for (const frame of frames) {
         try {
-            const content = await frame.content();
-            const $ = cheerio.load(content);
+            // Clean frame content too
+            const rawFrameContent = await frame.content();
+            const cleanFrameContent = cleanHtmlForAI(rawFrameContent, {
+                removeScripts: true,
+                removeStyles: true, // Keep styles off for frames too
+                extractNextData: false // No need for next data in frames
+            });
+
+            const $ = cheerio.load(cleanFrameContent);
             const frameUrl = frame.url();
 
             // Images
@@ -483,7 +560,7 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
                         // Classify the image role
                         const classification = classifyImageRole(src, alt, parents, score, false);
 
-                        // 3. Dimension-based hints (small influence only, +5-10 confidence)
+                        // 3. Dimension-based hints (ENHANCED - stronger influence)
                         let dimensionHint: { roleHint?: string; confidenceBoost: number } = { confidenceBoost: 0 };
                         const w = parseInt(width || '0', 10);
                         const h = parseInt(height || '0', 10);
@@ -492,29 +569,51 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
                             const aspectRatio = w / h;
                             const minDim = Math.min(w, h);
                             const maxDim = Math.max(w, h);
+                            const area = w * h;
 
-                            // Very small images → likely icon
+                            // Very small images → likely icon (STRONG signal)
                             if (maxDim <= 64) {
-                                dimensionHint = { roleHint: 'icon', confidenceBoost: 5 };
+                                dimensionHint = { roleHint: 'icon', confidenceBoost: 20 };
+                            }
+                            // Tiny images → definitely icon
+                            else if (maxDim <= 32) {
+                                dimensionHint = { roleHint: 'icon', confidenceBoost: 30 };
+                            }
+                            // Very large images → likely hero (STRONG signal)
+                            else if (area > 1000000 && classification.role === 'content') { // > 1000x1000
+                                dimensionHint = { roleHint: 'hero-foreground', confidenceBoost: 25 };
+                            }
+                            // Wide & large → hero background
+                            else if (aspectRatio > 1.6 && maxDim >= 1200) {
+                                dimensionHint = { roleHint: 'hero-background', confidenceBoost: 20 };
+                            }
+                            // Wide but medium → gallery or blog-thumbnail
+                            else if (aspectRatio > 1.4 && maxDim >= 600 && maxDim < 1200) {
+                                if (classification.role === 'content' || classification.role === 'unknown') {
+                                    dimensionHint = { roleHint: 'blog-thumbnail', confidenceBoost: 15 };
+                                }
                             }
                             // Square (0.9-1.1) → avatar/logo candidate
                             else if (aspectRatio >= 0.9 && aspectRatio <= 1.1 && minDim >= 80 && minDim <= 400) {
-                                dimensionHint = { roleHint: 'team-avatar', confidenceBoost: 5 };
-                            }
-                            // Wide (>1.6) → hero/gallery candidate
-                            else if (aspectRatio > 1.6 && maxDim >= 800) {
-                                dimensionHint = { roleHint: 'hero-background', confidenceBoost: 5 };
+                                dimensionHint = { roleHint: 'team-avatar', confidenceBoost: 15 };
                             }
                             // Portrait (0.6-0.8) → team/person
                             else if (aspectRatio >= 0.6 && aspectRatio <= 0.85 && minDim >= 200) {
-                                dimensionHint = { roleHint: 'team-avatar', confidenceBoost: 3 };
+                                dimensionHint = { roleHint: 'team-avatar', confidenceBoost: 12 };
                             }
                         }
 
-                        // Apply dimension boost to confidence (only if role matches hint)
+                        // Apply dimension boost to confidence
                         let finalConfidence = classification.confidence;
-                        if (dimensionHint.roleHint === classification.role) {
-                            finalConfidence += dimensionHint.confidenceBoost;
+                        if (dimensionHint.roleHint) {
+                            if (dimensionHint.roleHint === classification.role) {
+                                // Boost existing classification
+                                finalConfidence += dimensionHint.confidenceBoost;
+                            } else if (classification.role === 'content' || classification.role === 'unknown') {
+                                // Override weak classifications with strong dimension signals
+                                classification.role = dimensionHint.roleHint as ImageRole;
+                                finalConfidence = classification.confidence + dimensionHint.confidenceBoost;
+                            }
                         }
 
                         allImages.push({
@@ -531,7 +630,9 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
                                 isBackground: false,
                                 isCritical: parents.includes('hero') || parents.includes('header'),
                                 suggestedSize: classification.role === 'icon' ? 'thumbnail' : 'full'
-                            }
+                            },
+                            width: w || undefined,
+                            height: h || undefined
                         });
                     } catch (e) { }
                 }
@@ -639,9 +740,19 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
             const isDuplicate = semanticBlocks.some(b => b.content.includes(skeleton.substring(0, 100)) && b.content.length > skeleton.length);
 
             if (skeleton.length > 50 && !isDuplicate) {
+                const config = getCrawlerConfig();
+                const limit = config.contentLimits.semanticBlock;
+                const wasTruncated = skeleton.length > limit;
+
+                if (wasTruncated && config.contentLimits.warnOnTruncation) {
+                    console.warn(
+                        `⚠️ [Content Truncation] Semantic block truncated: ${skeleton.length} → ${limit} chars (${selector})`
+                    );
+                }
+
                 semanticBlocks.push({
                     type: type as any,
-                    content: skeleton.substring(0, 6000), // Cap block size
+                    content: skeleton.substring(0, limit),
                     selector: `${selector} (eq:${i})`
                 });
             }
@@ -701,7 +812,8 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
 
             // Semantic Weighting
             let boost = 1;
-            if (['BUTTON', 'A'].includes(tag) || el.className.includes('btn') || el.className.includes('cta')) boost = 5;
+            const clList = el.classList;
+            if (['BUTTON', 'A'].includes(tag) || clList.contains('btn') || clList.contains('cta')) boost = 5;
             if (['H1', 'H2', 'H3'].includes(tag)) boost = 3;
 
             const weight = area * boost;
@@ -725,7 +837,14 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
                     if (!match[1].startsWith('data:') && match[1].length > 4) {
                         const tag = el.tagName.toLowerCase();
                         const id = el.id ? '#' + el.id : '';
-                        const cls = el.className && typeof el.className === 'string' ? '.' + el.className.split(' ')[0] : '';
+                        // Safe className extraction for context
+                        let rawCls = '';
+                        if (typeof el.className === 'string') {
+                            rawCls = el.className;
+                        } else if (typeof el.className === 'object' && 'baseVal' in el.className) {
+                            rawCls = (el.className as any).baseVal || '';
+                        }
+                        const cls = rawCls ? '.' + rawCls.split(' ')[0] : '';
                         bgData.push({
                             src: match[1],
                             context: `css-background (${tag}${id}${cls})`
@@ -973,6 +1092,67 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
     // Apply path-based role inference to upgrade 'unknown' images
     applyPathGrouping(deduplicatedImages);
 
+    // --- PHASE 1.6: DUPLICATE SIZE DETECTION ---
+    // Link images that are the same but in different sizes
+    // Master = largest version, variants = smaller versions
+    (() => {
+        const groups = new Map<string, typeof deduplicatedImages>();
+
+        // Group images by normalized basename
+        deduplicatedImages.forEach(img => {
+            // Extract basename: remove size suffixes and common variations
+            const urlPath = img.src.toLowerCase();
+            const filename = urlPath.split('/').pop() || '';
+
+            // More aggressive normalization to catch variants like:
+            // - image-small.jpg, image-large.jpg, image.jpg
+            // - image_400x300.jpg, image_1200x800.jpg
+            // - image-thumb.jpg, image-full.jpg
+            const basename = filename
+                .replace(/[_-](thumb|thumbnail|small|medium|large|full|original)/gi, '')
+                .replace(/[_-]\d+x\d+/g, '')           // Remove _400x300
+                .replace(/[_-]\d+w/g, '')              // Remove _400w
+                .replace(/[_-]@\dx/g, '')              // Remove _@2x, _@3x
+                .replace(/\.(jpg|jpeg|png|webp|gif)$/i, ''); // Remove extension for matching
+
+            if (!groups.has(basename)) {
+                groups.set(basename, []);
+            }
+            groups.get(basename)!.push(img);
+        });
+
+        // Process groups with multiple sizes
+        groups.forEach(group => {
+            if (group.length <= 1) return; // No size variants
+
+            // Find images with dimensions
+            const withDimensions = group.filter(img =>
+                img.width && img.height && img.width > 0 && img.height > 0
+            );
+
+            if (withDimensions.length === 0) return; // Can't determine master without dimensions
+
+            // Find largest by area (width × height)
+            const master = withDimensions.reduce((max, img) => {
+                const maxArea = (max.width || 0) * (max.height || 0);
+                const imgArea = (img.width || 0) * (img.height || 0);
+                return imgArea > maxArea ? img : max;
+            });
+
+            // Set master's variants array (all smaller versions)
+            master.variants = group
+                .filter(img => img !== master)
+                .map(img => img.src);
+
+            // Set masterImage on all smaller versions
+            group.forEach(img => {
+                if (img !== master) {
+                    img.masterImage = master.src;
+                }
+            });
+        });
+    })();
+
     // --- PHASE 2: COMPONENT GROUPING ---
     // Assign groupIds to images that belong to the same component
     const groupedImages = (() => {
@@ -1025,10 +1205,111 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
         }));
     })();
 
+    // --- NEW: Color Analysis for Design System Extraction ---
+    // Analyze colors from important images (logos, hero images)
+    const importantImages = groupedImages.filter(img =>
+        img.role === 'logo' ||
+        img.role === 'hero-background' ||
+        img.role === 'hero-foreground'
+    ).slice(0, 10); // Limit to 10 most important images
+
+    // Run color analysis in parallel for performance
+    const colorAnalysisResults = await Promise.allSettled(
+        importantImages.map(async (img) => {
+            try {
+                const analysis = await ImageColorAnalyzer.analyzeImageColors(img.src);
+                return { src: img.src, analysis };
+            } catch {
+                return null;
+            }
+        })
+    );
+
+    // Attach color analysis to corresponding images
+    for (const result of colorAnalysisResults) {
+        if (result.status === 'fulfilled' && result.value) {
+            const { src, analysis } = result.value;
+            const img = groupedImages.find(i => i.src === src);
+            if (img) {
+                img.colorAnalysis = analysis;
+            }
+        }
+    }
+
+    // Extract design system colors if we have important images
+    let designSystemColors: DesignSystemColors | undefined = undefined;
+    if (importantImages.length > 0) {
+        try {
+            const colorData = await ImageColorAnalyzer.extractDesignSystemColors(
+                importantImages.map(img => ({ src: img.src, role: img.role }))
+            );
+
+            designSystemColors = {
+                brand: colorData.brandColors,
+                hero: colorData.heroColors.map(p => p.primary).filter(Boolean),
+                overall: colorData.overallPalette.slice(0, 10)
+            };
+
+        } catch {
+            // Color extraction is non-critical
+        }
+    }
+
+    // --- ADVANCED ANALYSIS: Forms, Links, Design System, Content Type, Media ---
+    const $final = cheerio.load(mainContent);
+
+    const analyzedForms = FormAnalyzer.analyzeForms($final);
+    const analyzedLinks = LinkAnalyzer.analyzeLinks($final, url);
+    const contentTypeDetection = ContentTypeDetector.detect($final, schemaMarkup);
+    const mediaAnalysis = MediaAnalyzer.analyze($final);
+
+    // 5. Design System Extraction (from collected data in page.evaluate)
+    let designSystemExtraction: any = undefined;
+    try {
+        // Extract design data from page.evaluate
+        const typography = designSignals?.typography || 'sans';
+        const fontFamilies = typography === 'serif' ? ['serif'] :
+                            typography === 'mono' ? ['monospace'] :
+                            ['sans-serif'];
+        const headingSizes: any = {}; // Simplified - would need actual extraction
+        const fontWeights = [400, 600, 700]; // Default weights
+        const lineHeights = [1.5, 1.6]; // Default
+        const spacingScale = designSignals?.spacing === 'compact' ? [4, 8, 12, 16] : designSignals?.spacing === 'spacious' ? [8, 16, 24, 32, 48] : [8, 16, 24, 32];
+        const borderRadii = designSignals?.roundingMode === 'sharp' ? [0] : designSignals?.roundingMode === 'soft' ? [4, 8] : designSignals?.roundingMode === 'full' ? [9999] : [8, 12, 16];
+        const shadows: string[] = designSignals?.hasHardShadows ? ['0 4px 6px rgba(0,0,0,0.1)'] : designSignals?.hasGlass ? ['0 8px 32px rgba(0,0,0,0.1)'] : [];
+
+        // Extract colors from extractedColors
+        const colors = {
+            primary: extractedColors?.primary ? [extractedColors.primary] : [],
+            secondary: extractedColors?.secondary ? [extractedColors.secondary] : [],
+            text: typeof extractedColors?.text === 'string' ? [extractedColors.text] : (extractedColors?.text || []),
+            background: typeof extractedColors?.background === 'string' ? [extractedColors.background] : (extractedColors?.background || [])
+        };
+
+        designSystemExtraction = DesignSystemExtractor.extract({
+            fontFamilies,
+            headingSizes,
+            fontWeights,
+            lineHeights,
+            spacingScale,
+            borderRadii,
+            shadows,
+            colors
+        });
+
+    } catch {
+        // Design system extraction is non-critical
+    }
+
+    // Replace allLinks and allForms with analyzed versions
+    const finalLinks = analyzedLinks;
+    const finalForms = analyzedForms;
+
     return {
         url,
         depth: 0,
         type: 'other',
+        variants: [], // Initialize empty - will be populated by normalization
         meta: {
             title,
             description,
@@ -1038,6 +1319,7 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
             lang,
             charset,
             viewport,
+            hreflangs, // Critical for multi-language linking
             social,
             schemaMarkup,
             geoSignals: { hasCitations: false, hasEvidence: false, hasAuthorInfo: false },
@@ -1049,12 +1331,28 @@ export async function extractPageData(page: Page, url: string): Promise<SiteNode
             headings: [],
             wordCount: fullWordCount,
             images: groupedImages,
-            links: allLinks,
-            forms: allForms,
+            links: finalLinks,
+            forms: finalForms,
             landmarks: [],
             hasSkipLink: false,
             hasLegalAccessibilityLink: false,
-            rawText: cleanedText.slice(0, 10000), // Increased limit for aggregated content
+            // NEW: Advanced analysis results
+            designSystem: designSystemExtraction,
+            contentType: contentTypeDetection,
+            media: mediaAnalysis,
+            rawText: (() => {
+                const config = getCrawlerConfig();
+                const limit = config.contentLimits.rawText;
+                const wasTruncated = cleanedText.length > limit;
+
+                if (wasTruncated && config.contentLimits.warnOnTruncation) {
+                    console.warn(
+                        `⚠️ [Content Truncation] rawText truncated: ${cleanedText.length} → ${limit} chars`
+                    );
+                }
+
+                return cleanedText.slice(0, limit);
+            })(),
             semanticBlocks,
             extractedColors: extractedColors as any
         },

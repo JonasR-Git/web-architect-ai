@@ -2,40 +2,71 @@ import { SiteStructure, StackConfig, DesignConfig } from '@/types';
 import { DESIGN_PRESETS } from '../../design/data/design-presets';
 import { createAIOptimizedStructure } from '../utils/grouping';
 
-// PHASE 1: OBSERVATION
-export const COMPONENT_EXTRACTION_PROMPT = `You are an expert UI Engineer performing a "Pattern Mining" analysis.
-Your task is to analyze the provided website content and extract ABSTRACT UI PATTERNS.
+// PHASE 1: OBSERVATION (The Distributed Scout)
+export const SCOUT_EXTRACTION_PROMPT = `You are a specialized UI Scout performing "Pattern Mining" on a specific subset of a website.
+Your task is to analyze the provided page data and extract RAW, HIGH-RESOLUTION UI PATTERNS.
 
-## GOAL
-List every distinct UI element, section, or interactive pattern you see in the data.
-DO NOT assign specific library names yet. Describe them functionally.
+## ROLE
+You are like an explorer with a magnifying glass. Ignore the "whole site" for now. Focus ONLY on the pages you are given.
+Note every unique visual structure, layout variation, and distinctive interactive element.
 
 ## INPUT DATA
-You will receive:
-1. **Crawled Content**: Titles, headings, images, forms, links.
-2. **Page Context**: The URL and detected sections.
-3. **Semantic Structure**: Pre-segmented blocks (Header, Main, Footer) - use this to categorize components by region.
+You will receive crawled content for a specific group of pages (e.g., an Archetype or a chunk of Unique Pages).
 
 ## OUTPUT FORMAT (JSON only)
 {
   "patterns": [
     {
-      "id": "pattern-1",
-      "name": "string (e.g. 'Hero with Split Layout')",
-      "description": "string (visual description)",
-      "frequency": "single-page" | "multi-page",
-      "detected_on": ["/home", "/about"]
+      "name": "string (PascalCase, e.g. 'HeroWithOffsetImage')",
+      "description": "string (detailed visual/structural description)",
+      "usage_context": "string (briefly describe where/how it appears)",
+      "visual_traits": ["string (e.g. 'bento-grid', 'glassmorphism', 'sticky-nav')"],
+      "props": ["string (key data points)"]
     }
   ]
 }
 
 ## RULES
-1. **Be Granular**: "Primary Button", "Secondary Button", "Newsletter Card", "Feature Grid".
-2. **No Hallucinations**: Only list what is evidenced in the text/images/forms.
-3. **Ignore Layout**: Do not list "Header" or "Footer" unless they have unique internal components (like a mega-menu). Focus on page content.
+1. **High Resolution**: Do not be "lazy". If you see a subtle variation in a grid or hero, mark it as a separate pattern.
+2. **Visual Specs**: Describe the LAYOUT. (e.g. "3-column grid where the middle item is double height", "Overlap of image and text box with a signature font").
+3. **Ignore Global Identity**: Don't worry if you find a "Header" that every scout finds. The "Consolidator" will handle that.
+4. **JSON ONLY**: No preamble or postscript.
 `;
 
-// PHASE 2: MAPPING (The "Menu" Step)
+// PHASE 1.5: CONSOLIDATION (The Librarian)
+export const PATTERN_CONSOLIDATION_PROMPT = `You are a UI Systems Librarian.
+Your task is to take multiple lists of "Raw Patterns" found by various Scouts and merge them into a single, canonical, high-resolution System Inventory.
+
+## GOAL
+- Deduplicate identical patterns (e.g., Global Header/Footer found by multiple scouts).
+- Group similar patterns that are essentially variants of the same design (e.g., "Hero with Image" and "Hero with Video" might be merged into "HeroSection" with a media variant).
+- Preserve the richness. If a scout found a "Specialized Pricing Table", don't merge it into a "Generic Table".
+
+## OUTPUT FORMAT (JSON only)
+{
+  "groups": [
+    {
+      "name": "string (e.g. 'Navigation', 'Heros', 'Feature Grids')",
+      "components": [
+        {
+          "name": "string",
+          "description": "string (canonical description)",
+          "usage": ["string (paths)"],
+          "props": ["string"]
+        }
+      ]
+    }
+  ]
+}
+
+## RULES
+1. **Quality over Quantity**: Merge common elements (Nav, Footer) but KEEP bespoke patterns. 
+2. **Standardize Naming**: Ensure all names are clear, clean PascalCase.
+3. **JSON ONLY**.
+`;
+
+// PHASE 2: MAPPING (The Architect)
+// (Existing COMPONENT_MAPPING_PROMPT remains largely the same but receives the consolidated high-res list)
 const SHADCN_COMPONENTS = [
   "Accordion", "Alert", "AlertDialog", "AspectRatio", "Avatar", "Badge", "Breadcrumb",
   "Button", "Calendar", "Card", "Carousel", "Chart", "Checkbox", "Collapsible",
@@ -85,24 +116,34 @@ ${JSON.stringify(SHADCN_COMPONENTS)}
 }
 
 ## RULES
-1. **Reuse First**: Always map to a shadcn component if possible (e.g. "Newsletter Input" -> "Input" + "Button").
-2. **Custom Fallback**: If NO shadcn component fits (e.g. "Interactive Map"), mark 'shadcn_base' as 'Custom'.
-3. **Atoms vs Molecules**:
-   - Atoms = Single shadcn primitives (Button, Badge).
-   - Molecules = Combinations (Card + Text + Button).
+1. **Composition over Flattening**: Do not flatten a complex section into a single component. Use the Atomic Design hierarchy:
+   - **Atoms**: Direct shadcn components (Button, Badge, Input).
+   - **Molecules**: Small functional groups (CardTitle + CardDescription, FormField + Label).
+   - **Organisms**: Complex page sections (HeroWithVideo, BentoFeatureGrid, ImageGallery) composed of multiple Atoms/Molecules.
+2. **Reuse First**: Map to a shadcn component if possible. For example, a "Newsletter Popup" is a "Dialog" or "Sheet" containing a "Form".
+3. **Custom Fallback**: If NO shadcn component fits the structural intent (e.g. "Interactive Timeline", "Parallax Scroll Section"), mark 'shadcn_base' as 'Custom'.
+4. **Variant-Awareness**: If two patterns are similar and mapped to the same shadcn base, use clear naming (e.g. 'ButtonPrimary', 'ButtonOutline') or suggest props for variants.
+5. **Consistency**: Use PascalCase for all component names. Ensure organisms are named after their layout/intent (e.g. 'ServicesBentoGrid').
 `;
 
-export function buildComponentExtractionPrompt(pagesContext: string) {
+export function buildScoutExtractionPrompt(pagesContext: string) {
   return [
-    { role: 'system', content: COMPONENT_EXTRACTION_PROMPT },
+    { role: 'system', content: SCOUT_EXTRACTION_PROMPT },
     { role: 'user', content: `Analyze these pages:\n${pagesContext}` }
   ];
 }
 
-export function buildComponentMappingPrompt(extractedPatterns: any, stackConfig?: any) {
+export function buildConsolidationPrompt(rawPatterns: any[]) {
+  return [
+    { role: 'system', content: PATTERN_CONSOLIDATION_PROMPT },
+    { role: 'user', content: `Consolidate these raw pattern lists into a single canonical inventory:\n${JSON.stringify(rawPatterns, null, 2)}` }
+  ];
+}
+
+export function buildComponentMappingPrompt(consolidatedPatterns: any, stackConfig?: any) {
   return [
     { role: 'system', content: COMPONENT_MAPPING_PROMPT },
-    { role: 'user', content: `Map these patterns to the library:\n${JSON.stringify(extractedPatterns)}` }
+    { role: 'user', content: `Map these high-resolution patterns to the library:\n${JSON.stringify(consolidatedPatterns)}` }
   ];
 }
 
@@ -167,7 +208,13 @@ The DESIGN STYLE section contains the visual language, while the provided **MOCK
 You MUST include specific implementation steps for EVERY PAGE listed in the "MANDATORY PAGES LIST". 
 - Do not skip pages.
 - Each page should have its own setup step in the implementation guide.
-- Refer to the detected sections for each page to determine which components go where.
+    - Referring to the detected sections for each page to determine which components go where.
+
+## CRITICAL: CLUSTER / TEMPLATE STRATEGY
+If the input contains "ARCHITECTURAL CLUSTERS (TEMPLATES)", you MUST:
+- **Identify Templates**: Create a specific "Phase" or "Step" for implementing the Template (e.g. "Phase 3: Product Template").
+- **Bulk Implementation**: Explicitly state that this template implements X number of pages.
+- **Don't Repeat**: Do not list every single page of a cluster as a separate step. Implement the template once.
 
 ## OUTPUT FORMAT (Markdown - TWO PARTS)
 
@@ -312,13 +359,13 @@ When AVAILABLE ASSETS are provided:
 `;
 
 export const PAGE_SPECS_SYSTEM_PROMPT = `You are a Senior Information Architect and Conversion Copywriter.
-Your task is to design a high-fidelity Content Strategy and Blueprint for a new webpage.
+Your task is to design a high-fidelity Content Strategy and Blueprint for a specific website target (Page or Global Layout).
 
 ## GOAL
-Define the structural flow (sections) AND write high-quality, final German copy for every section based on the provided source content.
+Define the structural flow (sections) AND write high-quality, final German copy based on the provided source content.
 
 ## INPUT
-You will receive "Targets" with New Path and raw Source Text from the original site.
+You will receive "Targets" with Path, Type ("page" or "layout"), and raw Source Text.
 
 ## OUTPUT FORMAT (JSON Array)
 Return an array of objects. Each object must have:
@@ -326,20 +373,34 @@ Return an array of objects. Each object must have:
 - description: Strategic summary (1-2 sentences).
 - content_goals: List of 3 key objectives.
 - sections: Array of blocks. Each block has:
-    - type: one of "hero", "text", "features", "bento_grid", "gallery", "testimonials", "cta", "form", "lead_magnet", "footer_minimal"
+    - type: one of "hero", "text", "features", "bento_grid", "gallery", "testimonials", "cta", "form", "lead_magnet", "header_global", "footer_global", "navigation_global"
     - title: A short internal name (e.g. "Values & Mission")
     - headline: STRING - WRITE THE ACTUAL FINAL HEADLINE IN GERMAN.
-    - content: STRING - WRITE THE ACTUAL FINAL BODY TEXT IN GERMAN (Markdown). Use facts from the source!
-    - content_hint: technical instructions for the developer (e.g. "Use Background Image from Source X").
+    - content: STRING - WRITE THE ACTUAL FINAL BODY TEXT IN GERMAN (Markdown).
+    - content_hint: technical instructions (e.g. "Use Background Image from Source X").
+    - images: ARRAY OF STRINGS - Select relevant image source URLs (src) from the "SOURCE ASSET INVENTORY" provided in the Source Text. USE EXACT CORRESPONDING URLs.
 
-## COPYWRITING GUIDELINES
-1. **German Language**: Write all headlines and content in professional, engaging German.
-2. **Be Specific**: No placeholders. Mention facts, names, numbers, and unique selling points found in the source text.
-3. **Conversion Focus**: Use active voice and clear calls-to-action (CTAs).
-4. **Scannability**: Break long text into bullet points or short paragraphs.
-5. **Strategic Architecture**: Start with a Hero. End with a CTA.
-
-## JSON ONLY. No preamble.
+## RULES & CONTEXT
+1. **LAYOUT TARGETS (type: "layout")**:
+   - Focus EXCLUSIVELY on global elements: Header, Footer, and Main Navigation.
+   - Use types like "header_global", "footer_global", "navigation_global".
+   - Navigation MUST include the actual menu items for the new sitemap.
+2. **PAGE TARGETS (type: "page")**:
+   - Focus EXCLUSIVELY on the unique content of the page.
+   - **PROHIBITED**: Do NOT include Header or Footer sections in page targets. These are handled by the global layout.
+   - **BUDGET**: Max 12 sections per target.
+   - **ASSETS**: Max 10 images per section. If more images are available but omitted, append "*(add more images from library if needed)*" to the section content.
+3. **German Language**: Write all headlines and content in professional, engaging German.
+4. **Be Specific**: No placeholders. Mention facts, names, USPs, and **Navigation Item Labels** found in the source text.
+5. **ASSET RULES**:
+   - Only use image URLs found in the "SOURCE ASSET INVENTORY".
+   - Do not hallucinate or guess URLs. Use the exact "SRC" fields.
+   - If no relevant image is found, return an empty array [].
+6. **JSON ONLY. No preamble.**
+7. **PATH LOCALIZATION**:
+   - The input 'path' is a generic Concept Path (e.g. '/shop/red-shoe').
+   - If you are writing German content and the specific product/page name is different (e.g. "Roter Schuh"), you MUST return a modified 'path' property (e.g. '/shop/roter-schuh').
+   - **CRITICAL**: Keep the folder structure (e.g. '/shop/') EXACTLY the same. Only localize the SLUG (the last part).
 `;
 
 export const DEPENDENCY_DETECTION_SYSTEM_PROMPT = `You are a Website Context Analyzer.
@@ -381,54 +442,126 @@ In the "sections" array, every block MUST have these exact fields:
 - content_hint: (Keep the original hint)
 - headline: STRING - WRITE THE ACTUAL DRAFT HEADLINE FOR THE WEBSITE USER.
 - content: STRING - WRITE THE ACTUAL DRAFT BODY TEXT IN MARKDOWN. Use the provided sources to be specific!
-- images: ARRAY OF STRINGS - Select up to 3 most relevant image source URLs (src) from the "SOURCE ASSET INVENTORY" provided in "primarySource" that fit this section's context.
+- images: ARRAY OF STRINGS - Select relevant image source URLs (src) from the "SOURCE ASSET INVENTORY" provided in "primarySource". For standard sections, select up to 3 images. For "gallery" type sections, select up to 20 images.
 
 ## ASSET RULES
 - Only use image URLs found in the "SOURCE ASSET INVENTORY".
 - Match images to sections based on their "ROLE" (e.g., Use 'hero' for Hero section, 'team' for About us).
+- **LIMIT**: Max 10 images per section.
+- **HINT**: If many relevant images are available in the inventory but you hit the 10-image limit for a section, append exactly "*(add more images from library if needed)*" at the very end of that section's "content" field.
 - Do not repeat the same image in every section.
 - If no relevant image is found for a section, return an empty array [].
 
 ## CRITICAL RULES
 1. **NO OBJECTS IN CONTENT**: The "content" and "headline" fields MUST be strings. Never return an object inside these fields.
 2. **BE SPECIFIC**: Do not return generic text or placeholders. Use names, facts, and info from the "primarySource" and "secondarySources".
-3. **LANGUAGE**: Always write the final "headline" and "content" in GERMAN.
-4. **JSON ONLY**: No preamble, no markdown code blocks around the JSON.
+3. **BUDGET**: Max 12 sections per page. If the source has more content, consolidate into high-value hubs.
+4. **PRESERVE ASSETS**: If the input "target" already has "images" or "logos", DO NOT lose them. If they are still valid, include them. If you select better ones from the inventory, swap them. NEVER return empty strings "" for src.
+5. **LAYOUT SPECIAL RULE**: If the target contains sections like "header_global" or "footer_global", treat the "primarySource" as a "Global Branding DNA" feed. 
+   - **LOGO PRIORITIZATION**: If the "target" object contains a "logos" array, these are the EXPLICITLY ASSIGNED BRAND LOGOS. Use the ones marked as "mandatory" with highest priority for the header.
+6. **LANGUAGE**: Always write the final "headline" and "content" in GERMAN.
+7. **JSON ONLY**: No preamble, no markdown code blocks around the JSON.
+8. **MAX LENGTH**: Keep the total JSON response under 12k characters. If content is too long, be concise.
 `;
 
 
 // Helper to prepare the massive context string
-export function prepareComponentContext(migrationPlan: any, crawledStructure?: any, userInstructions?: string, stackConfig?: any, critique?: any): string {
+/**
+ * PREPARE CONTEXT FOR A DISTRIBUTED SCOUT PASS
+ * Focuses on a specific subset of nodes (e.g. one archetype or one chunk of unique pages)
+ */
+export function prepareScoutContext(nodes: any[], tier: number = 0) {
+  let context = `## SCOUTING FOCUS: ANALYZING ${nodes.length} PAGES\n`;
+
+  nodes.forEach((node, idx) => {
+    context += prepareSinglePageContext(node, idx, tier);
+  });
+
+  return context;
+}
+
+/**
+ * HELPER: Formats a single page's metadata and semantic blocks for AI analysis
+ */
+export function prepareSinglePageContext(node: any, idx: number, tier: number = 0): string {
+  const path = new URL(node.url).pathname;
+  let pageCtx = `\n### Page ${idx + 1}: ${path}\n`;
+  pageCtx += `**URL**: ${node.url}\n`;
+  pageCtx += `**Title**: ${node.meta?.title || node.title || 'Untitled'}\n`;
+
+  if (node.meta?.description) {
+    pageCtx += `**Meta Description**: ${node.meta.description}\n`;
+  }
+
+  // 1. Headings (High Resolution)
+  if (node.content?.headings?.length) {
+    pageCtx += `\n**Heading Structure**:\n`;
+    node.content.headings.slice(0, 30).forEach((h: any) => {
+      const indent = '  '.repeat((h.level || 1) - 1);
+      pageCtx += `${indent} - H${h.level || '?'}: ${h.text?.substring(0, 60) || h}\n`;
+    });
+  }
+
+  // 2. Images (for visual context)
+  if (node.content?.images?.length) {
+    pageCtx += `\n**Images** (${node.content.images.length} total):\n`;
+    node.content.images.slice(0, 15).forEach((img: any) => {
+      const alt = img.alt || 'No alt text';
+      const src = img.src?.split('/').pop()?.substring(0, 40) || 'unknown';
+      pageCtx += `- [${alt.substring(0, 30)}] → ${src}\n`;
+    });
+  }
+
+  // 3. Forms
+  if (node.content?.forms?.length) {
+    pageCtx += `\n**Forms**: ${node.content.forms.length} detected\n`;
+    node.content.forms.slice(0, 5).forEach((form: any) => {
+      pageCtx += `- ${form.type || 'input'}: ${form.label || form.id || 'unlabeled'}\n`;
+    });
+  }
+
+  // 4. Semantic Blocks (CRITICAL)
+  if (node.content?.semanticBlocks?.length) {
+    pageCtx += `\n**Semantic UI Blocks**:\n`;
+    node.content.semanticBlocks.forEach((b: any) => {
+      const previewLimit = tier === 0 ? 1500 : (tier === 1 ? 800 : 300);
+      const preview = b.content.substring(0, previewLimit).replace(/\n+/g, ' ').trim();
+      pageCtx += `- [${b.type.toUpperCase()}](${b.selector}): ${preview}... \n`;
+    });
+  } else if (node.content?.rawText) {
+    const textLimit = tier === 0 ? 10000 : 5000;
+    const cleanText = node.content.rawText.replace(/\s+/g, ' ').trim().substring(0, textLimit);
+    pageCtx += `\n**Content Preview**:\n> ${cleanText}...\n`;
+  }
+
+  pageCtx += '\n---\n';
+  return pageCtx;
+}
+
+export function prepareComponentContext(migrationPlan: any, crawledStructure: any, userInstructions?: string, stackConfig?: any, critique?: any, tier: number = 0, overrides: any = {}): string {
   let pagesContext = '';
 
   if (critique) {
-    pagesContext += `
+    pagesContext += `\n## SITE AUDIT & DESIGN CRITIQUE:\n`;
+    pagesContext += `- Overall Score: ${critique.audit_summary?.total_score || 'N/A'}\n`;
+    pagesContext += `- BFSG Compliant: ${critique.audit_summary?.bfsg_compliant ? 'YES' : 'NO'}\n`;
+    pagesContext += `- Summary: ${critique.summary_de || critique.summary || 'N/A'}\n`;
 
-## AUDIT FINDINGS(CRITICAL):
-`;
-    pagesContext += `The existing site has an Accessibility Score of ${critique.accessibility_score} /100 and SEO Score of ${critique.seo_score}/100.
-`;
-    pagesContext += `** Critical Issues to Fix in Design **:
-`;
     if (critique.critical_issues?.length) {
-      critique.critical_issues.forEach((issue: string) => pagesContext += `- ${issue} \n`);
-    } else if (critique.audit_matrix) {
-      critique.audit_matrix.filter((i: any) => i.status === '❌ Fail' && i.criticality === 'K')
-        .forEach((i: any) => pagesContext += `- ${i.category}: ${i.description} (${i.finding}) \n`);
+      pagesContext += `\n### Top Critical Issues:\n`;
+      critique.critical_issues.slice(0, 5).forEach((issue: string) => {
+        pagesContext += `- ${issue}\n`;
+      });
     }
-    pagesContext += `
-Ensure the new component library specifically resolves these issues(e.g., proper contrast colors, semantic HTML tags, accessible form controls).
-
-`;
   }
   if (crawledStructure?.nodes) {
-    const { optimized, savings } = createAIOptimizedStructure(crawledStructure);
+    const { optimized, savings } = createAIOptimizedStructure(crawledStructure, overrides, tier);
 
     console.log(`📊[Component] Token optimization: ${savings.original} pages → ${savings.optimized} examples(${savings.percentage} % saved)`);
 
     const nodesToProcess = [
       ...optimized.uniquePages,
-      ...optimized.pagePatterns.flatMap((p: any) => p.examples)
+      ...optimized.groups.flatMap((p: any) => p.examples)
     ];
 
     pagesContext = `\n\n## CRAWLED PAGES ANALYSIS(Optimized: ${nodesToProcess.length} representative pages): \n`;
@@ -445,7 +578,7 @@ Ensure the new component library specifically resolves these issues(e.g., proper
 
       if (node.content?.headings?.length) {
         pagesContext += `\\n ** Heading Structure **: \\n`;
-        node.content.headings.slice(0, 15).forEach((h: any) => {
+        node.content.headings.slice(0, 30).forEach((h: any) => {
           const indent = '  '.repeat((h.level || 1) - 1);
           pagesContext += `${indent} - H${h.level || '?'}: ${h.text?.substring(0, 60) || h} \\n`;
         });
@@ -454,60 +587,148 @@ Ensure the new component library specifically resolves these issues(e.g., proper
       if (node.content?.headings?.length > 2) {
         const h2s = node.content.headings.filter((h: any) => h.level === 2).map((h: any) => h.text);
         if (h2s.length > 0) {
-          pagesContext += `\\n ** Detected Sections **: ${h2s.slice(0, 8).join(' | ')} \\n`;
+          pagesContext += `\\n ** Detected Sections **: ${h2s.slice(0, 15).join(' | ')} \\n`;
         }
       }
 
       if (node.content?.extractedColors) {
         const c = node.content.extractedColors;
         pagesContext += `\\n ** Detected Colors **: \\n`;
-        pagesContext += `- Dominant: ${c.dominant?.join(', ') || 'N/A'} \\n`;
-        pagesContext += `- Background: ${c.background?.join(', ') || 'N/A'} \\n`;
-        pagesContext += `- Text: ${c.text?.join(', ') || 'N/A'} \\n`;
+        pagesContext += `- Dominant: ${Array.isArray(c.dominant) ? c.dominant.join(', ') : (c.dominant || 'N/A')} \\n`;
+        pagesContext += `- Background: ${Array.isArray(c.background) ? c.background.join(', ') : (c.background || 'N/A')} \\n`;
+        pagesContext += `- Text: ${Array.isArray(c.text) ? c.text.join(', ') : (c.text || 'N/A')} \\n`;
       }
 
       if (node.content?.images?.length) {
         pagesContext += `\\n ** Images & Context ** (${node.content.images.length} total): \\n`;
-        node.content.images.slice(0, 12).forEach((img: any) => {
+
+        // Group images by role for better context
+        const imagesByRole: Record<string, any[]> = {};
+        node.content.images.forEach((img: any) => {
+          const role = img.role || 'unknown';
+          if (!imagesByRole[role]) imagesByRole[role] = [];
+          imagesByRole[role].push(img);
+        });
+
+        // Show role-based summary first
+        Object.entries(imagesByRole).forEach(([role, images]) => {
+          pagesContext += `  ${role}: ${images.length} image(s)\\n`;
+        });
+
+        // Show detailed images (prioritize important roles)
+        const priorityRoles = ['logo', 'hero-background', 'hero-foreground', 'blog-thumbnail'];
+        const detailedImages = [
+          ...node.content.images.filter((img: any) => priorityRoles.includes(img.role || '')),
+          ...node.content.images.filter((img: any) => !priorityRoles.includes(img.role || ''))
+        ].slice(0, 20);
+
+        detailedImages.forEach((img: any) => {
           const alt = img.alt || 'No alt text';
           const src = img.src?.split('/').pop()?.substring(0, 40) || 'unknown';
-          let line = `- [${alt.substring(0, 30)}] → ${src} `;
-          if (img.context) line += ` (Context: "${img.context}")`;
+          const role = img.role || 'unknown';
+          const confidence = img.roleConfidence || 0;
+          let line = `- [${role}${confidence > 70 ? '✓' : ''}] ${alt.substring(0, 30)} → ${src}`;
+          if (img.context) line += ` (Context: "${img.context.substring(0, 30)}")`;
           pagesContext += line + '\\n';
         });
       }
 
+      // NEW: Enhanced Form Analysis
       if (node.content?.forms?.length) {
-        pagesContext += `\\n ** Forms **: ${node.content.forms.length} form(s) detected\\n`;
+        pagesContext += `\\n ** Forms ** (${node.content.forms.length} total): \\n`;
         node.content.forms.slice(0, 5).forEach((form: any) => {
-          pagesContext += `- ${form.type || 'input'}: ${form.label || form.id || 'unlabeled'} \\n`;
+          let formLine = `- ${form.purpose || 'unknown'}`;
+          if (form.purposeConfidence) formLine += ` (${form.purposeConfidence}% confidence)`;
+          formLine += `: ${form.fields?.length || 0} fields`;
+          if (form.submitButton) formLine += `, "${form.submitButton.text}"`;
+          if (form.integrations?.length) formLine += ` [${form.integrations.join(', ')}]`;
+          pagesContext += formLine + '\\n';
         });
       }
 
+      // NEW: Enhanced Link Analysis
       if (node.content?.links?.length) {
-        const navLinks = node.content.links.filter((l: any) =>
-          l.href?.startsWith('/') || l.href?.startsWith('#')
-        ).slice(0, 10);
+        const ctaLinks = node.content.links.filter((l: any) => l.role === 'cta');
+        const socialLinks = node.content.links.filter((l: any) => l.social);
+        const navLinks = node.content.links.filter((l: any) => l.role === 'navigation');
+
+        if (ctaLinks.length > 0) {
+          pagesContext += `\\n ** CTAs ** (${ctaLinks.length}): `;
+          pagesContext += ctaLinks.slice(0, 5).map((l: any) => `"${l.text}" (${l.buttonStyle || 'link'})`).join(', ') + '\\n';
+        }
+
+        if (socialLinks.length > 0) {
+          pagesContext += `\\n ** Social Links **: `;
+          pagesContext += socialLinks.map((l: any) => l.social.platform).join(', ') + '\\n';
+        }
+
         if (navLinks.length > 0) {
-          pagesContext += `\\n ** Internal Links **: ${navLinks.map((l: any) => l.text || l.href).join(', ')} \\n`;
+          pagesContext += `\\n ** Navigation **: `;
+          pagesContext += navLinks.slice(0, 10).map((l: any) => l.text).join(', ') + '\\n';
+        }
+      }
+
+      // NEW: Content Type Detection
+      if (node.content?.contentType) {
+        pagesContext += `\\n ** Content Type **: ${node.content.contentType.type} (${node.content.contentType.confidence}% confidence)\\n`;
+        if (node.content.contentType.structuredData) {
+          const data = node.content.contentType.structuredData;
+          if (data.author) pagesContext += `  Author: ${data.author}\\n`;
+          if (data.publishDate) pagesContext += `  Published: ${data.publishDate}\\n`;
+          if (data.price) pagesContext += `  Price: ${data.price}\\n`;
+          if (data.eventDate) pagesContext += `  Event Date: ${data.eventDate}\\n`;
+        }
+      }
+
+      // NEW: Media Analysis
+      if (node.content?.media) {
+        const media = node.content.media;
+        if (media.videos?.length > 0) {
+          pagesContext += `\\n ** Videos ** (${media.videos.length}): `;
+          pagesContext += media.videos.map((v: any) => `${v.type}${v.videoId ? ` (${v.videoId})` : ''}`).join(', ') + '\\n';
+        }
+        if (media.embeds?.length > 0) {
+          pagesContext += `\\n ** Embeds ** (${media.embeds.length}): `;
+          pagesContext += media.embeds.map((e: any) => `${e.type}${e.provider ? ` (${e.provider})` : ''}`).join(', ') + '\\n';
+        }
+        if (media.interactiveElements?.length > 0) {
+          pagesContext += `\\n ** Interactive **: `;
+          pagesContext += media.interactiveElements.map((ie: any) => `${ie.type} (${ie.count})`).join(', ') + '\\n';
+        }
+      }
+
+      // NEW: Design System
+      if (node.content?.designSystem) {
+        const ds = node.content.designSystem;
+        pagesContext += `\\n ** Design System **:\\n`;
+        if (ds.typography?.fontFamilies?.length) {
+          pagesContext += `  Fonts: ${ds.typography.fontFamilies.join(', ')}\\n`;
+        }
+        if (ds.spacing?.scale?.length) {
+          pagesContext += `  Spacing Scale: ${ds.spacing.scale.join(', ')}px\\n`;
+        }
+        if (ds.borderRadius?.mode) {
+          pagesContext += `  Border Radius: ${ds.borderRadius.mode}\\n`;
         }
       }
 
       if (node.content?.semanticBlocks?.length) {
         pagesContext += `\\n ** Semantic Structure(Blocks) **: \\n`;
         node.content.semanticBlocks.forEach((b: any) => {
-          // Condensed block output
-          const preview = b.content.substring(0, 600).replace(/\\n/g, ' ');
+          // Tier-aware truncation for blocks
+          const previewLimit = tier === 0 ? 1000 : (tier === 1 ? 500 : 200);
+          const preview = b.content.substring(0, previewLimit).replace(/\\n+/g, ' ').trim();
           pagesContext += `- [${b.type.toUpperCase()}](${b.selector}): ${preview}... \\n`;
         });
       }
       else if (node.content?.rawText) {
+        // Tier-aware truncation for raw text
+        const textLimit = tier === 0 ? 10000 : (tier === 1 ? 5000 : 2000);
         const cleanText = node.content.rawText
           .replace(/\\s+/g, ' ')
           .replace(/\\n{3,}/g, '\\n\\n')
           .trim()
-          // Limit text significantly less (User approved up to 150k tokens)
-          .substring(0, 50000);
+          .substring(0, textLimit);
         pagesContext += `\\n ** Content Preview **: \\n > ${cleanText}...\\n`;
       }
 
@@ -575,7 +796,8 @@ export function buildImplementationPrompt(
   userInstructions?: string,
   availableAssets?: Record<string, string>,
   designConfig?: DesignConfig,
-  pageSpecs?: any[]
+  pageSpecs?: any[],
+  migrationPlan?: any
 ) {
   const ids = designConfig?.styleIds?.length ? designConfig.styleIds : ['modern-minimal'];
   const selectedPresets = Array.from(new Set(ids))
@@ -633,6 +855,18 @@ ${designGuidelines}
 
 ${customDesignContext}
 `;
+
+  if (migrationPlan?.clusters && migrationPlan.clusters.length > 0) {
+    userContent += `## 4. ARCHITECTURE & CLUSTERS (TEMPLATES)
+The following page groups share the same layout structure. Implement these as REUSABLE TEMPLATES (Dynamic Routes).
+
+`;
+    migrationPlan.clusters.forEach((c: any) => {
+      userContent += `- **Template Name**: ${c.id} (Pattern: \`${c.pattern}\`)\n`;
+      userContent += `  - **Page Count**: ${c.instances.length} pages\n`;
+      userContent += `  - **Context**: ${c.instances.slice(0, 3).map((i: any) => i.url).join(', ')}...\n\n`;
+    });
+  }
 
   if (spec) {
     userContent += `## 3. COMPONENT SPECIFICATION

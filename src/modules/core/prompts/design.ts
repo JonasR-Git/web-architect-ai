@@ -113,9 +113,9 @@ Use Google Fonts via CDN or Tailwind's default configuration:
 Apply \`font-bold\` to headlines and \`font-normal\` with \`leading-relaxed\` to body text.
 
 ## 🏷️ LOGO & BRANDING
-1. **Brand Presence**: Always check the \`images\` array for a logo (role: logo or isLogo: true). 
-2. **Usage**: Use the brand logo in the Header/Navbar. Ensure it has enough padding and a reasonable size (e.g., \`h-8\` to \`h-12\`).
-3. **Fallback**: If no logo image exists, create a professional text-based logo using the \`siteName\`.
+1. **Brand Presence**: If the \`assignedLogos\` data is provided, use the entries marked as \`mandatory\` with highest priority. 
+2. **Fallback**: If no assigned logos exist, check the \`images\` array for a logo (role: logo or isLogo: true). If still missing, create a professional text-based logo using the \`siteName\`.
+3. **Usage**: Use the brand logo in the Header/Navbar. Ensure it has enough padding and a reasonable size (e.g., \`h-8\` to \`h-12\`).
 
 ## 📝 CONTENT SOURCE HIERARCHY (MANDATORY)
 1. **plannedContent** (The Draft): This is your BIBLE.
@@ -140,6 +140,7 @@ Apply \`font-bold\` to headlines and \`font-normal\` with \`leading-relaxed\` to
 - Return ONLY the raw HTML.
 - Include a \`<style>\` block for custom animations (e.g., \`fade-in-up\`).
 - Ensure the page has a Header, Footer, and is Mobile-First.
+- **LAYOUT SPECIFIC**: If \`plannedContent\` contains sections of type \`header_global\`, \`navigation_global\`, or \`footer_global\`, you MUST use their specific headlines and content for the site\'s Header and Footer.
 - **CRITICAL**: If "REPLICATION STRATEGY" is provided in instructions, prioritize its technical directives over standard presets to ensure high-fidelity design reproduction.
 `;
 
@@ -486,6 +487,7 @@ GENERATE LANDING PAGE MOCKUP (Standard Mode).
 HIGH PRIORITY:
 ${siteData?.plannedContent ? `- PLATFORM DRAFT (plannedContent) IS PROVIDED. Use this strictly for page structure and text.` : '- No drafted content provided. Analyze rawText and generate suitable marketing copy.'}
 - IMAGES: We have ${siteData?.images?.length || 0} images available. Match them to section roles.
+- ASSIGNED LOGOS: ${siteData?.assignedLogos ? JSON.stringify(siteData.assignedLogos) : 'None provided yet. Select from global images pool.'}
 
 CONTEXT:
 Site Data: ${JSON.stringify(siteData || {})}
@@ -525,6 +527,7 @@ GENERATE UNLEASHED EXPERIENCE.
 
 CONTEXT:
 Site Data: ${JSON.stringify(siteData || {})}
+Assigned Logos: ${JSON.stringify(siteData?.assignedLogos || [])}
 User Prompt: ${userPrompt || 'Go wild.'}
 Iteration: ${iteration}
 `;

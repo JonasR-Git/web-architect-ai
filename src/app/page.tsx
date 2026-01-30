@@ -1,16 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { ProcessLog } from '@/modules/engineering/components/process-log';
 import { SiteTree } from '@/modules/analysis/components/visualization/site-tree';
 import { ConfigForm } from '@/modules/design/components/config-form';
 import { PlanViewer } from '@/modules/engineering/components/plan-viewer';
-import { SiteStructure, StackConfig, DesignConfig, MockupVariant } from '@/types';
+import { SiteStructure, StackConfig, DesignConfig, MockupVariant, MigrationPlan, ComponentSpecification, ClusterOverrides } from '@/types';
 import { DesignStudio } from '@/modules/design/components/design-studio';
 import { MockupPreview } from '@/modules/design/components/mockup-preview';
 import { AIClassificationModal } from '@/modules/analysis/components/ai-classification-modal';
 
 import { generateCritiqueAction, generateMigrationAction, generateComponentLibraryAction, generateImplementationPlanAction, optimizePageContentAction, downloadImagesAction, generateVisualMockupAction, detectDependenciesAction, regeneratePageSpecsAction } from './actions';
+import { normalizeUrlToConcept } from '@/modules/core/utils/normalization';
+import { ImageValidator } from '@/modules/analysis/services/image-validator';
 import { Toaster, toast } from 'sonner';
 import { Terminal, ArrowRight, Play, RefreshCw, Layers, Zap, Hexagon, Code2, Search, BrainCircuit, LayoutTemplate, Download, Palette, Eye, FileText, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -24,9 +26,12 @@ import { BFSGAuditViewer } from '@/modules/analysis/components/visualization/bfs
 import { generateProjectZip, downloadBlob, pageDataToMarkdown, OptimizedPageData, ContentFile } from '@/lib/zip';
 import { generatePageSpecsAction } from '@/app/actions';
 import { TargetSlot } from '@/modules/analysis/components/visualization/dual-panel-mapper';
+import type { SourcePage } from '@/types';
 import { DESIGN_PRESETS, DesignStyle } from '@/modules/design/data/design-presets';
 import { usePersistence } from '@/hooks/use-persistence';
 import { Save, FolderOpen, History, Clock } from 'lucide-react';
+import { groupSimilarPages } from '@/modules/core/utils/grouping';
+import { SemanticMergeMap } from '@/modules/core/utils/normalization';
 
 
 
@@ -56,9 +61,15 @@ export default function Home() {
 
   // Data State
   const [structure, setStructure] = useState<SiteStructure | null>(null);
+  const [semanticMerges, setSemanticMerges] = useState<SemanticMergeMap | undefined>(undefined);
+  const [excludedUrls, setExcludedUrls] = useState<Set<string>>(new Set());
+  const [clusterOverrides, setClusterOverrides] = useState<ClusterOverrides>({
+    forceArchetypes: [],
+    ignorePatterns: []
+  });
   const [critique, setCritique] = useState<any>(null);
-  const [migrationPlan, setMigrationPlan] = useState<any>(null);
-  const [componentSpec, setComponentSpec] = useState<any>(null);
+  const [migrationPlan, setMigrationPlan] = useState<MigrationPlan | null>(null);
+  const [componentSpec, setComponentSpec] = useState<ComponentSpecification | null>(null);
   const [finalOutput, setFinalOutput] = useState<{ spec: any, implPlan: any } | null>(null);
   const [crawlStats, setCrawlStats] = useState<CrawlStats | null>(null);
   const [customAssets, setCustomAssets] = useState<any[]>([]);
@@ -124,6 +135,172 @@ export default function Home() {
     isLoading
   } = usePersistence();
 
+  // --- Mapping Data Preparation (for Blueprint Tab) ---
+  const mappingSources = useMemo(() => {
+    if (!structure) return [];
+
+    const { normalizeStructureToConcepts } = require('@/modules/core/utils/normalization');
+    const normalizedStructure = normalizeStructureToConcepts(structure, semanticMerges);
+
+    // Filter out excluded URLs BEFORE clustering
+    const filteredStructure = excludedUrls.size > 0
+      ? { ...normalizedStructure, nodes: normalizedStructure.nodes.filter((n: any) => !excludedUrls.has(n.url)) }
+      : normalizedStructure;
+
+    const grouped = groupSimilarPages(filteredStructure, 2, 5, clusterOverrides);
+
+    const sources: SourcePage[] = [];
+
+    // Add Clusters
+    grouped.groups.forEach((group: any) => {
+      sources.push({
+        id: group.pattern,
+        url: group.pattern,
+        title: `Cluster: ${group.pattern}`,
+        type: 'cluster',
+        count: group.totalCount
+      });
+    });
+
+    // Add Unique Pages
+    grouped.uniquePages.forEach((node: any) => {
+      sources.push({
+        id: `page-${node.url}`,
+        url: node.url,
+        title: node.meta?.title || node.title || node.url,
+        type: 'page'
+      });
+    });
+
+    return sources;
+  }, [structure, semanticMerges, clusterOverrides, excludedUrls]);
+
+  const mappingTargets = useMemo(() => {
+    if (!structure || !migrationPlan) return [];
+
+    const { normalizeStructureToConcepts } = require('@/modules/core/utils/normalization');
+    const { buildIdLookup, resolveSourceId } = require('@/modules/analysis/utils/mapping-ids');
+
+    const normalizedStructure = normalizeStructureToConcepts(structure, semanticMerges);
+
+    // Filter out excluded URLs BEFORE clustering (same as mappingSources)
+    const filteredStructure = excludedUrls.size > 0
+      ? { ...normalizedStructure, nodes: normalizedStructure.nodes.filter((n: any) => !excludedUrls.has(n.url)) }
+      : normalizedStructure;
+
+    const grouped = groupSimilarPages(filteredStructure, 2, 5, clusterOverrides);
+
+    // Build efficient lookup with ALL cluster member URLs
+    const lookup = buildIdLookup(grouped.groups, grouped.uniquePages);
+
+    // Helper: Normalize path to prevent duplicates (/insights vs /insights/)
+    const normalizePath = (path: string): string => {
+      if (!path || path === '/') return '/';
+      // Remove trailing slash, except for root
+      return path.replace(/\/$/, '');
+    };
+
+    const targetMap = new Map<string, any>();
+
+    // Helper: resolve -2/-3 suffixed paths to base path if it exists
+    const resolveDeduplicatedKey = (rawKey: string): string => {
+      // Check if this is a -N suffixed duplicate (e.g., /blog-2, /services-2, /-2)
+      const suffixMatch = rawKey.match(/^(.+)-(\d+)$/);
+      if (suffixMatch) {
+        const basePath = suffixMatch[1];
+        // If the base path exists in the target map, use that instead
+        if (targetMap.has(basePath)) return basePath;
+      }
+      return rawKey;
+    };
+
+    // 1. Add Global Layout Target
+    targetMap.set('layout', {
+      id: 'target-layout',
+      path: 'layout',
+      label: 'layout',
+      type: 'layout',
+      action: 'keep',
+      sourceIds: [],
+    });
+
+    // 2. Add from sitemap FIRST (creates architectural targets as foundation)
+    migrationPlan.sitemap?.forEach((s: any) => {
+      const rawPath = s.path;
+      if (!rawPath) return;
+
+      const key = normalizePath(rawPath);
+
+      if (!targetMap.has(key)) {
+        targetMap.set(key, {
+          id: `target-${key}`,
+          path: key,
+          label: s.label || key,
+          type: s.type || 'page',
+          action: 'keep',
+          sourceIds: [],
+        });
+      }
+    });
+
+    // 3. Process pattern_mapping (Cluster -> Target mappings)
+    migrationPlan.pattern_mapping?.forEach((pm: any) => {
+      const rawPath = pm.target_base;
+      if (!rawPath) return;
+
+      const key = normalizePath(rawPath);
+      const sourceId = resolveSourceId(pm.pattern, lookup);
+
+      if (!targetMap.has(key)) {
+        targetMap.set(key, {
+          id: `target-${key}`,
+          path: key,
+          label: key,
+          type: pm.type || 'page',
+          action: pm.action || 'redirect',
+          sourceIds: sourceId ? [sourceId] : [],
+          description: pm.reason
+        });
+      } else if (sourceId) {
+        const target = targetMap.get(key)!;
+        if (!target.sourceIds.includes(sourceId)) {
+          target.sourceIds.push(sourceId);
+        }
+      }
+    });
+
+    // 4. Process page_mapping (Individual page mappings)
+    migrationPlan.page_mapping?.forEach((m: any) => {
+      const rawPath = m.new_path || m.old_url;
+      if (!rawPath) return;
+
+      let key = normalizePath(rawPath);
+      const sourceId = m.old_url ? resolveSourceId(m.old_url, lookup) : null;
+
+      // Resolve -2 suffixed duplicates to base path (e.g., /blog-2 → /blog)
+      key = resolveDeduplicatedKey(key);
+
+      if (!targetMap.has(key)) {
+        targetMap.set(key, {
+          id: `target-${key}`,
+          path: key,
+          label: key,
+          type: m.type || 'page',
+          action: m.action || 'keep',
+          sourceIds: sourceId ? [sourceId] : [],
+          description: m.reason || m.description
+        });
+      } else if (sourceId) {
+        const target = targetMap.get(key)!;
+        if (!target.sourceIds.includes(sourceId)) {
+          target.sourceIds.push(sourceId);
+        }
+      }
+    });
+
+    return Array.from(targetMap.values());
+  }, [structure, semanticMerges, clusterOverrides, migrationPlan, excludedUrls]);
+
   // --- Auto-Save Effect ---
   // Trigger save when important state changes (and we have at least a structure)
   useEffect(() => {
@@ -147,11 +324,14 @@ export default function Home() {
         pageSpecs,
         componentSpec,
         finalOutput,
+        excludedUrls: Array.from(excludedUrls), // Set -> Array
         optimizedContent: Array.from(optimizedContent.entries()), // Map -> Array
         tokenStats,
         customAssets,
         blueprintTab,
-        mockupViewMode
+
+        mockupViewMode,
+        clusterOverrides
       });
 
       // If server returned cleaned data (URLs instead of base64), update local state
@@ -172,7 +352,7 @@ export default function Home() {
     structure, critique, migrationPlan, componentSpec, finalOutput,
     designConfig, stackConfig, optimizedContent, view, url,
     userInstructions, logs, tokenStats, downloadedAssets, pageSpecs,
-    customAssets, blueprintTab, mockupViewMode
+    customAssets, blueprintTab, mockupViewMode, excludedUrls
   ]);
 
   // Handle Load Session
@@ -199,6 +379,13 @@ export default function Home() {
     setCustomAssets((data as any).customAssets || []);
     setBlueprintTab((data.blueprintTab as any) || 'overview');
     setMockupViewMode((data.mockupViewMode as any) || 'desktop');
+    setExcludedUrls(new Set(data.excludedUrls || []));
+    if (data.clusterOverrides) {
+      setClusterOverrides(data.clusterOverrides);
+    } else {
+      // Backwards compatibility or default
+      setClusterOverrides({ forceArchetypes: [], ignorePatterns: [] });
+    }
 
     if (data.optimizedContent) {
       setOptimizedContent(new Map(data.optimizedContent));
@@ -267,6 +454,9 @@ export default function Home() {
       });
 
       setStructure(structure);
+      if ((structure as any).semanticMerges) {
+        setSemanticMerges((structure as any).semanticMerges);
+      }
       setCrawlStats(null);
       addLog(`CRAWLER: Indexing complete. Found ${structure.nodes.length} pages.`, 'success');
       toast.success("Crawl Complete");
@@ -302,6 +492,13 @@ export default function Home() {
         });
         addLog(`🧬 DESIGN DNA: Auto-detected ${d.hasGlass ? 'Glassmorphism' : (d.hasHardShadows ? 'Brutalism' : 'Standard')} style.`, 'success');
       }
+      // Log pattern discovery summary
+      const grouped = groupSimilarPages(structure, 2);
+      addLog(`✨ PATTERN DISCOVERY: Found ${grouped.stats.uniquePatterns} unique page archetypes across ${structure.nodes.length} pages.`, 'info');
+      if (grouped.groups.length > 0) {
+        const topPatterns = grouped.groups.slice(0, 3).map(g => `"${g.pattern}" (${g.totalCount} pages)`).join(', ');
+        addLog(`💡 Major categories detected: ${topPatterns}...`, 'info');
+      }
 
       // Move to next step
       setView('crawl_result');
@@ -319,11 +516,19 @@ export default function Home() {
   const runAIAnalysis = async () => {
     if (!structure) return;
 
+    // --- Filtered Structure based on User Exclusions ---
+    const filteredStructure = {
+      ...structure,
+      nodes: structure.nodes.filter(n => !excludedUrls.has(n.url))
+    };
+
+    const excludedCount = structure.nodes.length - filteredStructure.nodes.length;
+    if (excludedCount > 0) {
+      addLog(`PRUNING: ${excludedCount} pages excluded from analysis by user.`, 'info');
+    }
+
     setIsProcessing(true);
     setView('ai_analysis');
-    // Clear logs or keep them? Let's append to keep context or clear for clarity. 
-    // User requested "Stepwise", so maybe clear helps focus. But log history is nice.
-    // Let's add a separator log.
     addLog('--- STARTING AI ANALYSIS ---');
 
     try {
@@ -332,8 +537,8 @@ export default function Home() {
       addLog('AI: Running Audit & Migration in parallel...', 'info');
 
       // Build parallel promises
-      const auditPromise = generateCritiqueAction(structure, userInstructions);
-      const migrationPromise = generateMigrationAction(structure, userInstructions);
+      const auditPromise = generateCritiqueAction(filteredStructure, userInstructions, clusterOverrides, semanticMerges);
+      const migrationPromise = generateMigrationAction(filteredStructure, userInstructions, clusterOverrides, semanticMerges);
 
       // Wait for all parallel requests
       const [auditRes, migRes] = await Promise.all([
@@ -350,13 +555,13 @@ export default function Home() {
       // Process Migration result
       if (!migRes.success) addLog(`AI WARNING: Migration failed (${migRes.error}). Using fallback data.`, 'warning');
       setMigrationPlan(migRes.data);
-      const migMeta = migRes.data?._meta;
+      const migMeta = (migRes.data as any)?._meta;
       addLog(`AI [${migMeta?.model || 'unknown'}]: Migration strategy ready.`, 'success', migMeta);
 
       // COMPONENTS (depends on migRes.data and auditRes.data, so must run after)
       setCurrentStep('Extracting Component Library...');
       addLog('AI: Extracting Component Pattern Library...');
-      const compRes = await generateComponentLibraryAction(migRes.data, structure, userInstructions, stackConfig, auditRes.data);
+      const compRes = await generateComponentLibraryAction(migRes.data, structure, userInstructions, stackConfig, auditRes.data, clusterOverrides, semanticMerges);
       if (!compRes.success) addLog(`AI WARNING: Component extraction failed (${compRes.error}). Using fallback data.`, 'warning');
       setComponentSpec(compRes.data);
       const compMeta = compRes.data?._meta;
@@ -389,7 +594,7 @@ export default function Home() {
       let currentSpec = componentSpec;
       if (!currentSpec) {
         addLog('GEMINI: Extracting Component Pattern Library...');
-        const compRes = await generateComponentLibraryAction(migrationPlan, structure, userInstructions, config, critique);
+        const compRes = await generateComponentLibraryAction(migrationPlan, structure, userInstructions, config, critique, {}, semanticMerges);
         if (!compRes.success) addLog(`AI WARNING: Component extraction failed (${compRes.error}). Using fallback data.`, 'warning');
         currentSpec = compRes.data;
         setComponentSpec(currentSpec);
@@ -439,15 +644,18 @@ export default function Home() {
       }
 
       // Run implementation planning
-      addLog(`GEMINI: Generating Implementation Plan...`);
+      if (!currentSpec) {
+        throw new Error('Component pattern library is missing. Analysis may have failed.');
+      }
 
       const res = await generateImplementationPlanAction(
-        currentSpec,        // ComponentSpecification
-        config,             // StackConfig
-        userInstructions,   // User instructions
-        assetMap,           // Available assets map
-        activeDesign,       // Design configuration
-        activeSpecs || []   // Full page specifications (drafts)
+        currentSpec as ComponentSpecification,
+        config,
+        userInstructions,
+        assetMap,
+        activeDesign,
+        activeSpecs || [],
+        migrationPlan
       );
 
       if (!res.success) addLog(`AI WARNING: Plan generation failed (${res.error}). Using fallback data.`, 'warning');
@@ -525,6 +733,7 @@ export default function Home() {
             `${s.groupId}: ${s.imageCount} images, role: ${s.role}`
           )
         },
+        assignedLogos: pageSpecs?.find(s => s.type === 'layout')?.logos || [],
         extractedColors: (() => {
           const colors = rootNode.content?.extractedColors;
           if (!colors) return undefined;
@@ -553,17 +762,50 @@ export default function Home() {
             }))
           };
         })(),
-        componentSpec: componentSpec ? { layout: componentSpec.layout, components: componentSpec.components } : undefined
+        componentSpec: componentSpec || undefined
       } : undefined;
 
-      // --- Parallel Generation (3 Variants) ---
-      const generationPromises = [1, 2, 3].map(id => {
+      // --- Parallel Generation (5 Variants synced with Design Studio) ---
+      const generationPromises = [1, 2, 3, 4, 5].map(id => {
+        const selectedStyles = designConfig.styleIds || [];
+        let variantStyleIds = [...selectedStyles];
+        let structuralSeed = "";
+
+        // Distribution Logic based on selected styles
+        if (selectedStyles.length >= 2) {
+          // Scenario A: Multiple styles - distribute focus
+          if (id === 1) {
+            // Variant 1: All selected (Balanced Mix)
+            variantStyleIds = [...selectedStyles];
+            structuralSeed = "Create a balanced fusion of all selected styles.";
+          } else if (id <= selectedStyles.length + 1) {
+            // Variant 2, 3...: Focus on individual styles from selection
+            const focusStyleIdx = (id - 2) % selectedStyles.length;
+            variantStyleIds = [selectedStyles[focusStyleIdx]];
+            structuralSeed = `Strongly emphasize the "${selectedStyles[focusStyleIdx]}" style parameters.`;
+          } else {
+            // Remaining variants: Experimental mix
+            structuralSeed = "Try an experimental structural approach, blending styles in a unique way.";
+          }
+        } else {
+          // Scenario B: Single or no style - vary the structure/vibe
+          const seeds = [
+            "Master Reference: Follow the selected style strictly with a standard professional layout.",
+            "Editorial: High-end magazine feel, large type, massive whitespace, artistic alignment.",
+            "Bento: Use asymmetrical bento grids, mixed card sizes, and sophisticated depth.",
+            "Interactive: Focus on glassmorphism layers, floating elements, and high-tech detail.",
+            "Efficient: High-density layouts, clear focal points, and business-focused hierarchy."
+          ];
+          structuralSeed = seeds[id - 1];
+        }
+
         const configVariant = {
           ...designConfig,
+          styleIds: variantStyleIds, // Override with specific focus for this variant
           mockupIteration: currentIteration,
-          // If iterating with feedback, only Variant 1 gets the strict history? 
-          // Or all get it but with different creative seeds.
-          customInstructions: id === 1 ? designConfig.customInstructions : `${designConfig.customInstructions} (Variation ${id}: Try a different structural approach)`
+          customInstructions: id === 1
+            ? designConfig.customInstructions
+            : `${designConfig.customInstructions} (${structuralSeed})`
         };
         return generateVisualMockupAction(configVariant as any, configVariant.customInstructions || undefined, siteDataForMockup);
       });
@@ -664,6 +906,7 @@ export default function Home() {
           spec.sections?.forEach((s: any) => {
             s.images?.forEach((img: any) => usedImageUrls.add(img.src));
           });
+          spec.logos?.forEach((img: any) => usedImageUrls.add(img.src));
         });
 
         pageSpecs.forEach((spec) => {
@@ -672,6 +915,10 @@ export default function Home() {
             page_title: spec.path,
             meta_description: spec.description || '',
             h1: spec.sections?.find(s => s.type === 'hero')?.headline || '',
+            url: spec.sourceDetails?.[0]?.url, // Pass original URL for MD export
+            language: spec.language || spec.sourceDetails?.[0]?.meta?.lang, // Pass extracted language
+            canonical: spec.canonical,
+            hreflangs: spec.hreflangs,
             keywords: [],
             sections: (spec.sections || []).map((s, idx) => ({
               id: `section-${idx}`,
@@ -713,7 +960,8 @@ export default function Home() {
         contentFiles,
         filteredImages,
         filteredMap,
-        designConfig.mockupHtml || undefined
+        designConfig.mockupHtml || undefined,
+        migrationPlan?.clusters
       );
       downloadBlob(blob, 'web-architect-export.zip');
 
@@ -733,30 +981,111 @@ export default function Home() {
 
     // Enrich targets with source details for AI
     const enrichedTargets = targets.map(t => {
-      const sources = t.sourceIds.map((sId: string) => {
-        const idx = parseInt(sId.replace('source-', ''));
-        return migrationPlan.page_mapping[idx];
+      // SPECIAL RULE: Layout target (Global Context Collector)
+      if (t.type === 'layout' || t.path === 'layout') {
+        const rawLogos = structure?.nodes?.flatMap(n => n.content?.images?.filter(img => img.isLogo || img.role === 'logo') || []) || [];
+
+        // Deduplicate and Filter
+        const uniqueLogosMap = new Map<string, any>();
+        rawLogos.forEach(img => {
+          if (!img.src) return;
+          const srcLower = img.src.toLowerCase();
+          // Filter out obvious UI icons that aren't usually the main brand logo
+          const isIcon = srcLower.includes('menu') ||
+            srcLower.includes('close') ||
+            srcLower.includes('search') ||
+            srcLower.includes('hamburger') ||
+            srcLower.includes('burger') ||
+            srcLower.includes('icon-') ||
+            srcLower.includes('cross') ||
+            srcLower.includes('chevron') ||
+            srcLower.includes('arrow') ||
+            srcLower.includes('social-') ||
+            srcLower.includes('facebook') ||
+            srcLower.includes('instagram') ||
+            srcLower.includes('linkedin');
+
+          if (isIcon && !img.isLogo) return; // Keep if explicitly marked as isLogo but filter if just role=logo and generic name
+
+          if (!uniqueLogosMap.has(img.src)) {
+            uniqueLogosMap.set(img.src, img);
+          }
+        });
+
+        const dedupedLogos = Array.from(uniqueLogosMap.values())
+          .sort((a, b) => (b.logoProb || 0) - (a.logoProb || 0));
+
+        const headerBlocks = structure?.nodes?.flatMap(n => n.content?.semanticBlocks?.filter((b: any) => b.type === 'header' || b.type === 'nav') || []) || [];
+        const footerBlocks = structure?.nodes?.flatMap(n => n.content?.semanticBlocks?.filter((b: any) => b.type === 'footer') || []) || [];
+
+        return {
+          ...t,
+          logos: dedupedLogos.map((img: any, i: number) => ({
+            src: img.src,
+            status: i === 0 ? 'mandatory' : 'optional' as const
+          })),
+          sourceDetails: [{
+            url: 'global-context',
+            title: 'Global Layout & Branding DNA',
+            content: `## BRAND ASSETS (LOGOS):
+${dedupedLogos.map(img => `- SRC: ${img.src} | ALT: ${img.alt || 'None'}`).join('\n')}
+
+## HEADER/NAVIGATION BLOCKS:
+${headerBlocks.slice(0, 10).map((b: any) => b.content).join('\n---\n')}
+
+## FOOTER BLOCKS:
+${footerBlocks.slice(0, 5).map((b: any) => b.content).join('\n---\n')}
+
+## PLANNED SITEMAP STRUCTURE (NAV TARGETS):
+${targets.filter(t => t.type !== 'layout').map(t => `- PATH: ${t.path} | LABEL: ${t.label}`).join('\n')}
+
+## SITE METADATA:
+Title: ${structure?.nodes?.[0]?.meta?.title || 'Unknown'}
+Sample Description: ${structure?.nodes?.[0]?.meta?.description || 'None'}`,
+            blocks: [...headerBlocks, ...footerBlocks]
+          }]
+        };
+      }
+
+      const urlList: { url: string; reason?: string }[] = t.sourceIds.flatMap((sId: string) => {
+        if (sId.startsWith('source-raw-')) {
+          const url = sId.substring(11);
+          return [{ url, reason: 'Raw discovered page' }];
+        } else if (sId.startsWith('source-')) {
+          const idx = parseInt(sId.substring(7));
+          const m = migrationPlan?.page_mapping[idx];
+          return m ? [{ url: m.old_url, reason: m.reason }] : [];
+        } else {
+          // Cluster pattern
+          const cluster = migrationPlan?.clusters?.find((c: any) => c.id === sId || c.pattern === sId);
+          return cluster ? cluster.instances.map((inst: any) => ({
+            url: inst.url,
+            reason: `Member of cluster ${cluster.pattern}`
+          })) : [];
+        }
       });
 
       return {
         ...t,
-        sourceDetails: sources.map((s: any) => {
+        sourceDetails: urlList.map(s => {
           // Find original node to get content
-          const node = structure?.nodes.find((n: any) => n.url === s.old_url);
-          const rawText = node?.content?.rawText || '';
+          const node = structure?.nodes.find((n: any) => n.url === s.url);
+          if (!node) return null;
+
+          const rawText = node.content?.rawText || '';
           return {
-            url: s.old_url,
-            title: s.reason,
+            url: s.url,
+            title: s.reason || node.meta?.title,
             // Pass truncated content + Image Metadata to AI
             content: `## SOURCE ASSET INVENTORY (AVAILABLE IMAGES):
-${(node?.content?.images || []).map((img: any) => `- SRC: ${img.src} | ALT: ${img.alt || 'None'} | ROLE: ${img.role || 'unknown'}`).join('\n')}
+${(node.content?.images || []).map((img: any) => `- SRC: ${img.src} | ALT: ${img.alt || 'None'} | ROLE: ${img.role || 'unknown'}`).join('\n')}
 
 ## SOURCE TEXT CONTENT:
 ${rawText.substring(0, 50000)}`,
             // Context-Aware Data Feed
-            blocks: node?.content?.semanticBlocks || []
+            blocks: node.content?.semanticBlocks || []
           };
-        })
+        }).filter(Boolean)
       };
     });
 
@@ -774,15 +1103,44 @@ ${rawText.substring(0, 50000)}`,
 
         // --- STEP 1: FRAME DESIGN (Architecture) ---
         setCurrentStep(`Designing Frame for ${target.path}...`);
-        const result = await generatePageSpecsAction([target], structure, currentSessionId || undefined);
+        const result = await generatePageSpecsAction([target], structure, currentSessionId || undefined, semanticMerges);
 
         if (result.success && result.data && result.data[0]) {
           let currentSpec = result.data[0];
 
+          // Normalize initial spec images too
+          if (currentSpec.sections) {
+            currentSpec.sections = currentSpec.sections.map((s: any) => ({
+              ...s,
+              images: (s.images || [])
+                .map((img: any) => {
+                  const src = typeof img === 'string' ? img : img.src;
+                  if (!src || src.trim() === '') return null;
+
+                  // Filter out obvious non-URL strings or AI hallucinations
+                  const isLink = src.startsWith('http') || src.startsWith('/') || src.startsWith('./') || src.startsWith('data:');
+                  if (!isLink) return null;
+
+                  return { src: src.trim(), status: (img && typeof img === 'object' && img.status) || 'optional' };
+                })
+                .filter(Boolean)
+            }));
+          }
+
+          // ADD TO UI IMMEDIATELY (Initial Frame)
+          setPageSpecs(prev => {
+            const list = prev || [];
+            const existing = list.find(p => p.path === currentSpec.path);
+            if (existing) return list.map(p => p.path === currentSpec.path ? currentSpec : p);
+            return [...list, currentSpec];
+          });
+
           // --- STEP 2: CONTEXT COLLECTION (Mining) ---
           setCurrentStep(`Searching dependencies for ${target.path}...`);
           try {
-            const sitemapPaths = structure?.nodes?.map((n: any) => new URL(n.url).pathname) || [];
+            const sitemapPaths = structure?.nodes?.map((n: any) => {
+              try { return new URL(n.url).pathname; } catch (e) { return n.url; }
+            }).filter(Boolean) || [];
             const sectionHints = currentSpec.sections?.map((s: any) => s.type).join(", ") || "General content";
 
             const depResult = await detectDependenciesAction(
@@ -819,18 +1177,33 @@ ${rawText.substring(0, 50000)}`,
             );
 
             if (regResult.success && regResult.data) {
-              // Normalize images to SectionImage format if AI returned strings
+              // Normalize images to SectionImage format and FILTER OUT EMPTY STRINGS
               const normalizedData = { ...regResult.data };
               if (normalizedData.sections) {
                 normalizedData.sections = normalizedData.sections.map((s: any) => ({
                   ...s,
-                  images: (s.images || []).map((img: any) => {
-                    if (typeof img === 'string') return { src: img, status: 'optional' };
-                    return { src: img.src || '', status: img.status || 'optional' };
-                  })
+                  images: (s.images || [])
+                    .map((img: any) => {
+                      const src = typeof img === 'string' ? img : img.src;
+                      return src && src.trim() !== '' ? { src: src, status: img.status || 'optional' } : null;
+                    })
+                    .filter(Boolean)
                 }));
               }
-              currentSpec = { ...normalizedData, dependencies: newDeps, dependencies_detected: true, lastGeneratedAt: Date.now() };
+              currentSpec = {
+                ...normalizedData,
+                sourceDetails: target.sourceDetails, // PRESERVE THIS
+                logos: target.logos, // PRESERVE THIS
+                dependencies: newDeps,
+                dependencies_detected: true,
+                lastGeneratedAt: Date.now()
+              };
+
+              // VALIDATION: Ensure we have sections. If not, don't overwrite if it was a failure
+              if (!currentSpec.sections || currentSpec.sections.length === 0) {
+                console.warn(`[Iteration Loop] Target ${target.path} returned no sections. Keeping frame.`);
+                currentSpec.sections = result.data[0].sections || [];
+              }
 
               // ONLY NOW: Display the final result in UI
               setPageSpecs(prev => {
@@ -847,6 +1220,24 @@ ${rawText.substring(0, 50000)}`,
       } // End of for loop
 
       setPagesCompleted(total);
+
+      // Image validation
+      if (structure && pageSpecs) {
+        const inventory = ImageValidator.buildAssetInventory(structure);
+        const imageValidation = ImageValidator.validatePageSpecImages(pageSpecs, inventory);
+
+        if (!imageValidation.isValid) {
+          toast.warning(`${imageValidation.invalidImages.length} Bilder nicht im Inventar gefunden`);
+          console.warn('Image validation issues:', {
+            invalidImages: imageValidation.invalidImages,
+            warnings: imageValidation.warnings
+          });
+
+          // Log detailed report to console for debugging
+          console.log(ImageValidator.generateValidationReport(imageValidation));
+        }
+      }
+
       toast.success("All drafts generated successfully!");
       // BETTER: Reload from what we just set
       return pageSpecs || targets;
@@ -1199,7 +1590,21 @@ ${rawText.substring(0, 50000)}`,
             </div>
 
             <div className="lg:col-span-7">
-              <SiteTree structure={structure} />
+              <SiteTree
+                structure={structure}
+                semanticMerges={semanticMerges}
+                excludedUrls={excludedUrls}
+                clusterOverrides={clusterOverrides}
+                onToggleExclusion={(url, excluded) => {
+                  setExcludedUrls(prev => {
+                    const next = new Set(prev);
+                    if (excluded) next.add(url);
+                    else next.delete(url);
+                    return next;
+                  });
+                }}
+                onUpdateOverrides={setClusterOverrides}
+              />
             </div>
           </div>
         )}
@@ -1239,22 +1644,57 @@ ${rawText.substring(0, 50000)}`,
                   {!pageSpecs ? (
                     <Button
                       onClick={() => {
-                        if (!migrationPlan?.page_mapping) return;
+                        if (!migrationPlan?.page_mapping && !migrationPlan?.pattern_mapping) return;
 
                         // Reconstruct targets structure for the handler
                         const targetMap = new Map<string, any>();
-                        migrationPlan.page_mapping.forEach((m: any, i: number) => {
+
+                        // 1. Initialize from sitemap to catch all structural targets (including layout)
+                        migrationPlan.sitemap?.forEach(s => {
+                          const key = s.path;
+                          targetMap.set(key, {
+                            id: `target-${key}`,
+                            path: s.path,
+                            label: s.label || s.path,
+                            type: s.type || 'page',
+                            action: 'keep', // Default, will be updated by mapping
+                            sourceIds: [],
+                          });
+                        });
+
+                        // 2a. Map sources from pattern_mapping (cluster mappings)
+                        migrationPlan.pattern_mapping?.forEach((pm: any) => {
+                          const key = pm.target_base;
+                          if (!key) return;
+                          if (!targetMap.has(key)) {
+                            targetMap.set(key, {
+                              id: `target-${key}`,
+                              path: key,
+                              label: key,
+                              type: pm.type || 'page',
+                              action: pm.action || 'redirect',
+                              sourceIds: [],
+                            });
+                          }
+                        });
+
+                        // 2b. Map sources from page_mapping
+                        migrationPlan.page_mapping?.forEach((m: any, i: number) => {
                           const key = m.new_path || m.old_url;
                           if (!targetMap.has(key)) {
                             targetMap.set(key, {
                               id: `target-${key}`,
                               path: m.new_path,
                               label: m.new_path,
+                              type: m.type || 'page',
                               action: m.action || 'redirect',
                               sourceIds: [],
                             });
                           }
-                          targetMap.get(key)!.sourceIds.push(`source-${i}`);
+                          const target = targetMap.get(key)!;
+                          target.sourceIds.push(`source-${i}`);
+                          if (m.action) target.action = m.action;
+                          if (m.type) target.type = m.type;
                         });
 
                         // Pass structure explicitly to ensure fresh state if closure is stale? 
@@ -1281,7 +1721,7 @@ ${rawText.substring(0, 50000)}`,
               <BlueprintTabs
                 activeTab={blueprintTab}
                 onTabChange={setBlueprintTab}
-                mappingCount={migrationPlan.page_mapping?.length}
+                mappingCount={(migrationPlan.page_mapping?.length || 0) + (migrationPlan.pattern_mapping?.length || 0)}
               />
 
 
@@ -1341,57 +1781,72 @@ ${rawText.substring(0, 50000)}`,
               {/* MAPPING TAB */}
               {blueprintTab === 'mapping' && (
                 <div className="animate-in fade-in h-[800px]">
-                  {migrationPlan.page_mapping && migrationPlan.page_mapping.length > 0 ? (
+                  {((migrationPlan.page_mapping?.length ?? 0) > 0 || (migrationPlan.pattern_mapping?.length ?? 0) > 0 || mappingSources.length > 0) ? (
                     <DualPanelMapper
-                      sources={migrationPlan.page_mapping.map((m: any, i: number) => ({
-                        id: `source-${i}`,
-                        url: m.old_url,
-                        title: m.reason,
-                      }))}
-                      initialTargets={(() => {
-                        // Group by new_path to create targets
-                        const targetMap = new Map<string, any>();
-                        migrationPlan.page_mapping.forEach((m: any, i: number) => {
-                          const key = m.new_path || m.old_url;
-                          if (!targetMap.has(key)) {
-                            // Client-side safety: Force homepage to be 'keep' if it looks like a redirect to self
-                            let action = m.action || 'redirect';
-                            if (key === '/' && action === 'redirect') {
-                              action = 'keep'; // Force keep for root
-                            }
+                      sources={mappingSources}
+                      initialTargets={mappingTargets}
 
-                            targetMap.set(key, {
-                              id: `target-${key}`,
-                              path: m.new_path,
-                              label: m.new_path,
-                              action: action,
-                              sourceIds: [],
-                            });
-                          }
-                          targetMap.get(key)!.sourceIds.push(`source-${i}`);
-                        });
-                        return Array.from(targetMap.values());
-                      })()}
                       onSave={(targets) => {
-                        // Convert back to page_mapping format
-                        const newMapping = targets.flatMap(t =>
-                          t.sourceIds.map((sId: string) => {
-                            const idx = parseInt(sId.replace('source-', ''));
-                            const original = migrationPlan.page_mapping[idx];
-                            return {
-                              ...original,
-                              new_path: t.path,
-                              action: t.action,
-                              // If description exists (from AI), we could store it in reason or a new field
-                              // For now we persist it in the mapping object if the type allows
-                              ...(t.description ? { description: t.description, content_goals: t.content_goals } : {})
-                            };
-                          })
-                        );
+                        // Expansion Logic: Convert Targets back to full Page mapping
+                        // We preserve the layout entries but allow them to be updated if modified in the mapper
+                        const newMapping: any[] = [];
+                        const userTargets = new Set(targets.map(t => t.id));
+
+                        // Add existing layout entries ONLY if they weren't in the mapper (backup)
+                        // but usually they ARE in the mapper now.
+
+                        targets.forEach(t => {
+                          t.sourceIds.forEach((sId: string) => {
+                            // Is it a cluster?
+                            const cluster = migrationPlan.clusters?.find((c: any) => c.pattern === sId);
+
+                            if (cluster) {
+                              // EXPAND CLUSTER
+                              cluster.instances.forEach((inst: any) => {
+                                newMapping.push({
+                                  old_url: inst.url,
+                                  new_path: t.path,
+                                  action: t.action,
+                                  type: t.type,
+                                  reason: `Part of cluster ${cluster.pattern}`,
+                                  description: t.description,
+                                  content_goals: t.content_goals
+                                });
+                              });
+                            } else if (sId.startsWith('source-raw-')) {
+                              const url = sId.substring(11);
+                              newMapping.push({
+                                old_url: url,
+                                new_path: t.path,
+                                action: t.action,
+                                type: t.type,
+                                reason: 'Manually mapped discovered page',
+                                ...(t.description ? { description: t.description, content_goals: t.content_goals } : {})
+                              });
+                            } else if (sId.startsWith('source-')) {
+                              // Single Page
+                              const idx = parseInt(sId.substring(7));
+                              const original = migrationPlan.page_mapping[idx];
+                              if (original) {
+                                newMapping.push({
+                                  ...original,
+                                  new_path: t.path,
+                                  action: t.action,
+                                  type: t.type,
+                                  ...(t.description ? { description: t.description, content_goals: t.content_goals } : {})
+                                });
+                              }
+                            }
+                          });
+                        });
+
+                        // Also preserve unmapped pages? 
+                        // Current logic: If a source is NOT in any target, it's effectively deleted/ignored.
+                        // Ideally we should warn or auto-add 'delete' targets for unused sources, but users can drag them to delete.
+
                         setMigrationPlan((prev: any) => ({ ...prev, page_mapping: newMapping }));
                       }}
                       onGenerateSpecs={handleGenerateSpecs}
-
                     />
                   ) : (
                     <div className="h-full flex items-center justify-center text-gray-500">
@@ -1413,14 +1868,20 @@ ${rawText.substring(0, 50000)}`,
         {view === 'content_review' && pageSpecs && (
           <ContentReviewEditor
             targets={pageSpecs}
+            clusters={migrationPlan?.clusters}
             structure={structure}
             onBack={() => setView('ai_result')}
             onUpdate={(updated) => setPageSpecs(updated)}
+            onUpdateClusters={(updatedClusters) => {
+              setMigrationPlan((prev: MigrationPlan | null) => prev ? { ...prev, clusters: updatedClusters } : null);
+            }}
             isGenerating={isProcessing && pagesCompleted < totalPages}
             currentProgress={pagesCompleted}
             totalProgress={totalPages}
             currentStep={currentStep}
             onApprove={() => {
+              if (!migrationPlan || !pageSpecs) return;
+
               // Merge specs into migrationPlan
               const updatedMapping = migrationPlan.page_mapping.map((m: any) => {
                 const target = pageSpecs.find(t => t.path === (m.new_path || m.old_url));
@@ -1435,13 +1896,19 @@ ${rawText.substring(0, 50000)}`,
                 return m;
               });
 
-              setMigrationPlan((prev: any) => ({ ...prev, page_mapping: updatedMapping }));
-
+              setMigrationPlan({
+                ...migrationPlan,
+                page_mapping: updatedMapping
+              });
               toast.success("Content Strategy Approved!");
               setView('design_studio');
             }}
             sessionId={currentSessionId || undefined}
-            allImages={structure?.nodes?.flatMap(n => n.content.images || []) || []}
+            allImages={structure?.nodes?.flatMap(n => (n.content?.images || []).map((img: any) => ({
+              ...img,
+              sourceUrl: n.url,
+              sourceTitle: n.meta?.title || n.url
+            }))) || []}
             customAssets={customAssets}
             onUpload={(newAsset) => setCustomAssets(prev => [newAsset, ...prev])}
           />
@@ -1511,6 +1978,7 @@ ${rawText.substring(0, 50000)}`,
                     `${s.groupId}: ${s.imageCount} images, role: ${s.role}`
                   )
                 },
+                assignedLogos: pageSpecs?.find(s => s.type === 'layout')?.logos || [],
                 extractedColors: (() => {
                   const colors = structure.nodes[0].content?.extractedColors;
                   if (!colors) return undefined;
@@ -1556,11 +2024,7 @@ ${rawText.substring(0, 50000)}`,
                     }))
                   };
                 })(),
-                componentSpec: componentSpec ? {
-                  layout: componentSpec.layout,
-                  components: componentSpec.components,
-                  design_system: componentSpec.design_system
-                } : undefined,
+                componentSpec: componentSpec || undefined,
                 migrationPlan: migrationPlan ? {
                   rationale: migrationPlan.rationale,
                   sitemap: migrationPlan.sitemap
@@ -1584,11 +2048,19 @@ ${rawText.substring(0, 50000)}`,
                 <div>
                   <h2 className="text-2xl font-bold text-white flex items-center gap-3">
                     Mockup Preview
-                    {(designConfig.mockupIteration || 1) > 1 && (
-                      <span className="text-sm font-normal px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
-                        Iteration {designConfig.mockupIteration}
-                      </span>
-                    )}
+                    {(() => {
+                      const active = (designConfig.mockupVariants || []).find(v => v.id === designConfig.activeVariantId)
+                        || (designConfig.mockupHistory || []).find(v => v.id === designConfig.activeVariantId);
+                      const iter = active?.iteration || designConfig.mockupIteration || 1;
+                      if (iter > 1 || active) {
+                        return (
+                          <span className="text-sm font-normal px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                            Iteration {iter}
+                          </span>
+                        );
+                      }
+                      return null;
+                    })()}
                   </h2>
                   <p className="text-gray-400 text-sm">Review the AI-generated design. Give feedback to improve or finalize the planning.</p>
                 </div>
@@ -1620,16 +2092,20 @@ ${rawText.substring(0, 50000)}`,
 
                 <Button
                   onClick={() => {
-                    const activeVariant = (designConfig.mockupVariants || []).find(v => v.id === designConfig.activeVariantId)
-                      || (designConfig.mockupHistory || []).find(v => v.id === designConfig.activeVariantId)
-                      || (designConfig.mockupVariants && designConfig.mockupVariants[0]);
+                    const activeVariantId = designConfig.activeVariantId;
+                    const variants = designConfig.mockupVariants || [];
+                    const history = designConfig.mockupHistory || [];
+
+                    const activeVariant = variants.find(v => v.id === activeVariantId)
+                      || history.find(v => v.id === activeVariantId)
+                      || (variants.length > 0 ? variants[0] : null);
 
                     if (activeVariant) {
-                      // Trigger selection logic manually if variant exists
                       const newDesignConfig: DesignConfig = {
                         ...designConfig,
                         mockupHtml: activeVariant.html,
-                        activeVariantId: activeVariant.id
+                        activeVariantId: activeVariant.id,
+                        mockupIteration: activeVariant.iteration // Sync iteration to historical one if selected
                       };
                       handleConfigSubmit(stackConfig, newDesignConfig, pageSpecs || []);
                     } else {
@@ -1638,7 +2114,7 @@ ${rawText.substring(0, 50000)}`,
                   }}
                   className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white shadow-lg"
                 >
-                  Plan generieren <ArrowRight className="w-4 h-4 ml-2" />
+                  Mit Mockup Plan generieren <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
             </div>
@@ -1651,7 +2127,17 @@ ${rawText.substring(0, 50000)}`,
                     variants={designConfig.mockupVariants}
                     activeVariantId={designConfig.activeVariantId}
                     mockupHistory={designConfig.mockupHistory}
-                    onVariantChange={(id) => setDesignConfig(prev => ({ ...prev, activeVariantId: id }))}
+                    onVariantChange={(id) => {
+                      setDesignConfig(prev => {
+                        const target = (prev.mockupVariants || []).find(v => v.id === id)
+                          || (prev.mockupHistory || []).find(v => v.id === id);
+                        return {
+                          ...prev,
+                          activeVariantId: id,
+                          mockupHtml: target?.html || prev.mockupHtml // Sync HTML immediately on click
+                        };
+                      });
+                    }}
                     html={designConfig.mockupHtml}
                     isLoading={isGeneratingMockup}
                     error={mockupError || undefined}

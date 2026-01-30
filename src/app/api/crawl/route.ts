@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { WebCrawler } from '@/modules/analysis/crawler/crawler';
 import { MOCK_SITE_STRUCTURE } from '@/data/mocks';
+import { AIService } from '@/modules/core/ai-service';
 
 // Helper for encoding SSE data
 const encoder = new TextEncoder();
@@ -56,10 +57,10 @@ export async function GET(req: NextRequest) {
 
             // Real Crawler Logic
             try {
-                // Full site crawl - up to 1000 pages, unlimited depth, 5 parallel workers
-                const crawler = new WebCrawler({ maxPages: 1000, maxDepth: 10, concurrency: 5 });
+                // Full site crawl - up to 25000 pages, unlimited depth, 20 parallel workers
+                const crawler = new WebCrawler({ maxPages: 25000, maxDepth: 20, concurrency: 20 });
 
-                send('log', { message: `INIT: Starting FULL site crawl for ${url} (5 workers, no limit)...`, type: 'info' });
+                send('log', { message: `INIT: Starting FULL site crawl for ${url} (20 workers, no limit)...`, type: 'info' });
 
                 // Forward crawler events to SSE
                 crawler.on('start', (data) => {
@@ -95,7 +96,73 @@ export async function GET(req: NextRequest) {
                 console.log(`[Crawl Complete] ${structure.nodes.length} pages, ${totalImages} images from ${structure.rootUrl}`);
 
                 // Send completion event
-                send('complete', structure);
+                // --- SEMANTIC BRANCH ANALYSIS ---
+                // 1. Extract Branch Candidates
+                const branches: any[] = [];
+                const seenPaths = new Set();
+
+                // Language prefixes to skip (handled by language normalization, not branch merging)
+                const langPrefixes = new Set([
+                    'de', 'en', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ja', 'ko',
+                    'ar', 'tr', 'sv', 'no', 'da', 'fi', 'cs', 'hu', 'ro', 'el', 'hr', 'sk',
+                    'english', 'deutsch', 'german', 'french', 'spanish', 'italian', 'portuguese',
+                    'dutch', 'polish', 'russian', 'chinese', 'japanese', 'korean',
+                ]);
+
+                structure.nodes.forEach(node => {
+                    try {
+                        const u = new URL(node.url);
+                        const path = u.pathname;
+                        const parts = path.split('/').filter(Boolean);
+
+                        // Skip pure language roots (e.g., /en, /de, /english)
+                        if (parts.length === 1 && langPrefixes.has(parts[0].toLowerCase())) {
+                            return;
+                        }
+
+                        // For paths under language prefixes (e.g., /en/services),
+                        // strip the prefix to get the actual branch (e.g., /services)
+                        let branchParts = parts;
+                        if (parts.length >= 1 && langPrefixes.has(parts[0].toLowerCase())) {
+                            branchParts = parts.slice(1);
+                        }
+
+                        if (branchParts.length >= 1 && branchParts.length <= 2) {
+                            const branchPath = '/' + branchParts.join('/');
+                            if (!seenPaths.has(branchPath)) {
+                                seenPaths.add(branchPath);
+                                branches.push({
+                                    id: branchParts.join('-'),
+                                    path: branchPath,
+                                    sample: node.url
+                                });
+                            }
+                        }
+                    } catch (e) { }
+                });
+
+                // 2. AI Analysis
+                let semanticMerges: { merges: any[] } = { merges: [] };
+                if (branches.length > 0) {
+                    send('log', { message: `AI: Analyzing ${branches.length} branch roots for semantic merging...`, type: 'info' });
+                    const ai = new AIService();
+                    const rawMerges = await ai.analyzeBranchStructure(branches) as any;
+
+                    // Safety: Filter out single-source "renames" (AI should not rename a branch with no equivalent)
+                    semanticMerges = {
+                        merges: (rawMerges?.merges || []).filter((m: any) => {
+                            if (!m.sources || m.sources.length < 2) {
+                                console.log(`[BranchAnalysis] Skipping single-source merge: ${m.concept} <- ${m.sources}`);
+                                return false;
+                            }
+                            return true;
+                        })
+                    };
+                    send('log', { message: `AI: Found ${semanticMerges.merges.length} semantic clusters.`, type: 'success' });
+                }
+
+                // Send completion event with Merges
+                send('complete', { ...structure, semanticMerges });
 
             } catch (error: any) {
                 console.error('Stream Error:', error);

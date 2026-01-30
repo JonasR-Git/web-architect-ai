@@ -2,6 +2,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import { EventEmitter } from 'events';
 import { SiteNode, SiteStructure } from '@/types';
 import { extractPageData } from './extractor';
+import { checkPageQuality } from './quality-filter';
 import { URL } from 'url';
 
 interface CrawlerOptions {
@@ -24,7 +25,7 @@ export class WebCrawler extends EventEmitter {
         this.options = {
             maxDepth: 3,
             maxPages: 100,
-            concurrency: 3, // Parallel workers for faster crawling
+            concurrency: 20, // Parallel workers for faster crawling
             ...options,
         };
     }
@@ -80,6 +81,21 @@ export class WebCrawler extends EventEmitter {
                 return false;
             }
 
+            // 4. Broken Relative Link Trap (e.g., /blog/linkedin.com)
+            // If the path contains what looks like a domain name, it's usually a mistake.
+            const segments = lowerPath.split('/').filter(Boolean);
+            const suspiciousDomains = ['linkedin.com', 'facebook.com', 'twitter.com', 'instagram.com', 'youtube.com', 'google.com', 'mailto:', '.com', '.net', '.org'];
+
+            for (const s of segments) {
+                if (suspiciousDomains.some(d => s.includes(d))) {
+                    // Check if it's a file resource (e.g. image-google.com.png) - ALLOW
+                    // But if it's "linkedin.com" alone or as folder -> BLOCK
+                    if (!s.match(/\.(png|jpg|jpeg|gif|svg|webp|css|js)$/)) {
+                        return false;
+                    }
+                }
+            }
+
             return true;
         } catch (e) {
             return false;
@@ -103,7 +119,22 @@ export class WebCrawler extends EventEmitter {
         try {
             this.browser = await puppeteer.launch({
                 headless: true,
-                args: ['--no-sandbox', '--disable-setuid-sandbox'],
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    // Memory optimization flags
+                    '--disable-dev-shm-usage',        // Use /tmp instead of /dev/shm
+                    '--disable-gpu',                  // Disable GPU
+                    '--disable-software-rasterizer',  // Disable software rasterizer
+                    '--disable-extensions',           // No extensions
+                    '--disable-background-networking', // Reduce background tasks
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-renderer-backgrounding',
+                    '--disable-features=TranslateUI,BlinkGenPropertyTrees',
+                    // Memory limits
+                    '--js-flags="--max-old-space-size=512"', // Limit JS heap to 512MB per tab
+                ],
             });
 
             await this.crawlLoop();
@@ -126,7 +157,7 @@ export class WebCrawler extends EventEmitter {
 
     private async crawlLoop() {
         let pagesProcessed = 0;
-        const concurrency = this.options.concurrency || 5;
+        const concurrency = this.options.concurrency || 10;
         const activeWorkers: Promise<void>[] = [];
 
         // Pending URLs being processed (to avoid race conditions)
@@ -184,7 +215,17 @@ export class WebCrawler extends EventEmitter {
             });
 
             try {
-                const pageData = await this.processPage(current.url, current.depth);
+                // HARD WORKER TIMEOUT: Even if processPage hangs (e.g. browser crash), we assume failure after 90s
+                const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 90000));
+                const pageData = await Promise.race([
+                    this.processPage(current.url, current.depth),
+                    timeoutPromise
+                ]);
+
+                if (!pageData) {
+                    console.warn(`[Crawler] Worker timeout or failure for ${current.url}`);
+                    // Optionally emit a detailed error log event here?
+                }
 
                 if (pageData) {
                     this.nodes.push(pageData);
@@ -215,10 +256,7 @@ export class WebCrawler extends EventEmitter {
                             .map(([role, count]) => `${role}: ${count}`)
                             .join(', ');
 
-                        if (summary && summary !== lastLoggedRoles) {
-                            console.log(`[ImageRoles] ${summary}`);
-                            lastLoggedRoles = summary;
-                        }
+                        lastLoggedRoles = summary || lastLoggedRoles;
                     }
 
                     // Add internal links to queue
@@ -292,10 +330,23 @@ export class WebCrawler extends EventEmitter {
         let page: Page | null = null;
         try {
             page = await this.browser.newPage();
+
+            // Set resource limits to prevent memory bloat
+            await page.setRequestInterception(false); // Disable unless needed
             await page.setUserAgent('WebArchitectAI-Crawler/1.0 (+http://web-architect-ai.com)');
 
             // Increased timeout for "deep crawl"
-            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+            const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+            // --- QUALITY & ERROR FILTERING ---
+            const quality = await checkPageQuality(page, response);
+            if (!quality.passed) {
+                console.warn(`[Skipped] ${url}: ${quality.reason}`);
+                this.emit('page-error', { url, error: quality.reason });
+                // Early return - page cleanup in finally
+                return null;
+            }
+            // ---------------------------------
 
             // --- LAZY LOAD HACK: Dynamic Infinite Scroll (Advanced) ---
             await page.evaluate(async () => {
@@ -353,15 +404,22 @@ export class WebCrawler extends EventEmitter {
             if (msg.includes('ERR_TOO_MANY_REDIRECTS')) {
                 console.warn(`Skipped ${url}: Redirect Loop`);
             } else if (msg.includes('Timeout') || msg.includes('timed out')) {
-                console.warn(`Skipped ${url}: Timeout (45s)`);
+                console.warn(`Skipped ${url}: Timeout (60s)`);
             } else {
                 console.warn(`Failed to process ${url}:`, msg);
             }
-            // Emit as 'page-error' but maybe with cleaner type for UI?
             this.emit('page-error', { url, error: msg });
             return null;
         } finally {
-            if (page) await page.close();
+            // CRITICAL: Always close page, even if never created successfully
+            if (page) {
+                try {
+                    // Close page and clear all resources
+                    await page.close();
+                } catch (closeError) {
+                    console.warn(`Failed to close page ${url}:`, closeError);
+                }
+            }
         }
     }
 }

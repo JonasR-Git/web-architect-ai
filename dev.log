@@ -1,0 +1,45 @@
+
+> web-architect-ai@0.1.0 dev
+> next dev
+
+⚠ Port 3000 is in use by an unknown process, using available port 3001 instead.
+▲ Next.js 16.1.4 (Turbopack)
+- Local:         http://localhost:3001
+- Network:       http://192.168.188.35:3001
+- Environments: .env.local
+- Experiments (use with caution):
+  · serverActions
+
+✓ Starting...
+✓ Ready in 1104ms
+○ Compiling / ...
+ GET / 200 in 4.2s (compile: 3.9s, render: 361ms)
+AI Client: OPENROUTER_API_KEY is present.
+AI Client initialized. Default model: xiaomi/mimo-v2-flash
+ GET / 200 in 53ms (compile: 5ms, render: 48ms)
+ POST / 200 in 5.9s (compile: 6ms, render: 5.9s)
+ POST / 200 in 6.1s (compile: 4ms, render: 6.1s)
+[Persistence] Loading session 3d716d38-70c5-49dd-9b05-a8d9fac6be5a...
+ POST / 200 in 343ms (compile: 4ms, render: 339ms)
+✓ Compiled in 264ms
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+ GET / 200 in 421ms (compile: 251ms, render: 171ms)
+AI Client: OPENROUTER_API_KEY is present.
+AI Client initialized. Default model: xiaomi/mimo-v2-flash
+ POST / 200 in 4.6s (compile: 4ms, render: 4.6s)
+[Persistence] Loading session 3d716d38-70c5-49dd-9b05-a8d9fac6be5a...
+ POST / 200 in 265ms (compile: 3ms, render: 262ms)
+⚠ Fast Refresh had to perform a full reload due to a runtime error.
+✓ Compiled in 195ms
+ GET / 200 in 457ms (compile: 231ms, render: 226ms)
+AI Client: OPENROUTER_API_KEY is present.
+AI Client initialized. Default model: xiaomi/mimo-v2-flash
+ POST / 200 in 5.0s (compile: 4ms, render: 5.0s)
+AI Client: OPENROUTER_API_KEY is present.
+AI Client initialized. Default model: xiaomi/mimo-v2-flash
+✓ Compiled in 205ms
+ POST / 200 in 5.4s (compile: 227ms, render: 5.2s)
+✓ Compiled in 209ms
+✓ Compiled in 184ms
+✓ Compiled in 202ms
+✓ Compiled in 237ms

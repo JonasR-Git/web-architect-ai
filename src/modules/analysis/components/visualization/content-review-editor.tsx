@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { TargetSlot, SectionImage } from './dual-panel-mapper';
+import { ClusterReviewCard } from './cluster-review-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -43,8 +44,10 @@ import { SiteStructure } from '@/types';
 
 interface ContentReviewEditorProps {
     targets: TargetSlot[];
+    clusters?: any[]; // ClusterSpec[]
     structure: SiteStructure | null; // Needed for access to source content
     onUpdate: (updatedTargets: TargetSlot[]) => void;
+    onUpdateClusters?: (updatedClusters: any[]) => void;
     onApprove: () => void;
     onBack: () => void;
     sessionId?: string;
@@ -67,14 +70,508 @@ const SECTION_ICONS: Record<string, any> = {
     cta: MousePointerClick,
     form: MessageSquare,
     lead_magnet: Magnet,
-    footer_minimal: AlignLeft,
+    header_global: Menu,
+    footer_global: AlignLeft,
+    navigation_global: MousePointerClick,
     default: Box
 };
+
+interface ReviewCardProps {
+    target: TargetSlot;
+    index: number;
+    isLayout: boolean;
+    structure: SiteStructure | null;
+    regeneratingIds: Record<string, boolean>;
+    SECTION_ICONS: Record<string, any>;
+    handleUndo: (id: string) => void;
+    handleRegenerate: (id: string) => void;
+    handleFieldChange: (id: string, field: keyof TargetSlot, value: any) => void;
+    handleGoalChange: (id: string, idx: number, value: string) => void;
+    addGoal: (id: string) => void;
+    removeGoal: (id: string, idx: number) => void;
+    handlePromptChange: (id: string, prompt: string) => void;
+    updateTarget: (id: string, updates: Partial<TargetSlot>) => void;
+    setSwappingImage: (val: { targetId: string, sectionIdx: number, isLogo?: boolean } | null) => void;
+    setTempSelectedImages: (images: string[]) => void;
+}
+
+function ReviewCard({
+    target,
+    index,
+    isLayout,
+    structure,
+    regeneratingIds,
+    SECTION_ICONS,
+    handleUndo,
+    handleRegenerate,
+    handleFieldChange,
+    handleGoalChange,
+    addGoal,
+    removeGoal,
+    handlePromptChange,
+    updateTarget,
+    setSwappingImage,
+    setTempSelectedImages
+}: ReviewCardProps) {
+    return (
+        <div className="bg-[#0A0A0B] border border-white/10 rounded-xl overflow-hidden shadow-xl">
+            {/* Page Header */}
+            <div className="px-6 py-4 bg-white/5 border-b border-white/5 flex items-center justify-between">
+                <div className="flex items-center gap-4">
+                    <div className={cn(
+                        "w-10 h-10 rounded-lg flex items-center justify-center font-mono text-lg font-bold border",
+                        isLayout ? "bg-purple-500/20 text-purple-400 border-purple-500/20" : "bg-blue-500/20 text-blue-400 border-blue-500/20"
+                    )}>
+                        {isLayout ? <Layout size={20} /> : index + 1}
+                    </div>
+                    <div>
+                        <div className="flex items-center gap-3">
+                            <code className="text-lg font-bold text-white tracking-tight">{target.path}</code>
+                            <div className="flex gap-2">
+                                <span className={cn(
+                                    "text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border",
+                                    target.action === 'keep' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                        target.action === 'merge' ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
+                                            "bg-blue-500/10 text-blue-400 border-blue-500/20"
+                                )}>
+                                    {target.action}
+                                </span>
+                                {target.sections && (
+                                    <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border bg-purple-500/10 text-purple-400 border-purple-500/20">
+                                        {target.sections.length} Components
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="flex flex-col gap-2 mt-3">
+                            {/* Row 1: Primary Merged Sources */}
+                            <div className="flex flex-col gap-1">
+                                <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Primary Merged Content:</span>
+                                <div className="flex flex-wrap gap-2">
+                                    {(target as any).sourceDetails?.length > 0 ? (
+                                        (target as any).sourceDetails.map((src: any, idx: number) => (
+                                            <div key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-gray-300 max-w-full truncate" title={src.content?.substring(0, 100)}>
+                                                <ArrowRight className="w-3 h-3 text-gray-500" />
+                                                <span className="truncate max-w-[200px]">{src.path || src.url || src.id || 'Unknown Source'}</span>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <span className="text-xs text-gray-600">
+                                            {target.sourceIds?.length || 0} sources (IDs: {target.sourceIds?.join(', ') || 'None'})
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Row 2: Secondary / dependencies (Context) */}
+                            {target.dependencies && target.dependencies.length > 0 && (
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-[10px] text-blue-500/80 font-medium uppercase tracking-wider flex items-center gap-1">
+                                        <Sparkles size={8} /> Context / Subsources:
+                                    </span>
+                                    <div className="flex flex-wrap gap-2">
+                                        {target.dependencies.map((dep: any, dIdx: number) => {
+                                            const depPath = typeof dep === 'string' ? dep : dep.path || dep.url || `unknown-${dIdx}`;
+                                            const node = structure?.nodes?.find(n => {
+                                                try {
+                                                    return new URL(n.url).pathname === depPath;
+                                                } catch (e) {
+                                                    return false;
+                                                }
+                                            });
+                                            const imgCount = node?.content?.images?.length || 0;
+                                            const wordCount = node?.content?.rawText?.split(/\s+/)?.length || 0;
+
+                                            return (
+                                                <div key={`${depPath}-${dIdx}`} className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-300 transition-colors hover:bg-blue-500/20 cursor-help"
+                                                    title={`${imgCount} Images available, ~${wordCount} words of text context.`}>
+                                                    <BrainCircuit size={10} />
+                                                    <span className="font-mono">{depPath}</span>
+                                                    <span className="text-[10px] text-blue-400/60 ml-1">
+                                                        ({imgCount} Imgs)
+                                                    </span>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Actions Area */}
+                <div className="flex items-center gap-2">
+                    {/* Undo Button */}
+                    {target.previousState && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleUndo(target.id)}
+                            className="border-white/10 text-gray-400 hover:text-white hover:bg-white/5"
+                            title="Undo last regeneration"
+                        >
+                            <RotateCcw size={14} className="mr-2" /> Undo
+                        </Button>
+                    )}
+
+                    {/* Regenerate Button */}
+                    <Button
+                        size="sm"
+                        onClick={() => handleRegenerate(target.id)}
+                        disabled={regeneratingIds[target.id]}
+                        className={cn(
+                            "font-medium border border-blue-500/30",
+                            target.lastModifiedAt && (!target.lastGeneratedAt || target.lastModifiedAt > target.lastGeneratedAt)
+                                ? "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40 animate-pulse" // Highlight if modified
+                                : "bg-blue-500/10 hover:bg-blue-500/20 text-blue-400"
+                        )}
+                    >
+                        {regeneratingIds[target.id] ? (
+                            <><Loader2 size={14} className="mr-2 animate-spin" /> Generating...</>
+                        ) : (
+                            <><RefreshCw size={14} className="mr-2" /> Neu Generieren</>
+                        )}
+                    </Button>
+                </div>
+            </div>
+
+            <div className="p-6 grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
+
+                {/* LEFT: Strategy & Goals (The "Briefing") */}
+                <div className="md:col-span-4 space-y-6 md:border-r border-b md:border-b-0 border-white/5 md:pr-6 pb-6 md:pb-0">
+                    <div className="space-y-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                            <Sparkles size={12} className="text-blue-400" /> {isLayout ? 'Layout Logic' : 'Page Strategy'}
+                        </label>
+                        <Textarea
+                            value={target.description || ''}
+                            onChange={(e) => handleFieldChange(target.id, 'description', e.target.value)}
+                            className="min-h-[120px] bg-black/30 border-white/10 text-sm leading-relaxed text-gray-300 resize-none focus:border-blue-500/50"
+                            placeholder="AI will generate a briefing here..."
+                        />
+                    </div>
+
+                    <div className="space-y-3">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center justify-between">
+                            {isLayout ? 'Branding Requirements' : 'Content Goals'}
+                            <Button
+                                onClick={() => addGoal(target.id)}
+                                size="sm"
+                                variant="ghost"
+                                className="h-5 px-2 text-[10px] text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
+                            >
+                                <Plus size={10} className="mr-1" /> Add
+                            </Button>
+                        </label>
+                        <div className="space-y-2">
+                            {target.content_goals && target.content_goals.length > 0 ? (
+                                target.content_goals.map((goal, i) => (
+                                    <div key={i} className="flex items-start gap-2 group/goal">
+                                        <div className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500/40 shrink-0" />
+                                        <Input
+                                            value={goal}
+                                            onChange={(e) => handleGoalChange(target.id, i, e.target.value)}
+                                            className="h-7 text-sm bg-transparent border-0 border-b border-white/5 focus:border-blue-500/30 rounded-none px-0 py-1 shadow-none text-gray-300 placeholder:text-gray-700"
+                                        />
+                                        <button
+                                            onClick={() => removeGoal(target.id, i)}
+                                            className="mt-1.5 opacity-0 group-hover/goal:opacity-100 text-gray-600 hover:text-red-400 transition-opacity"
+                                        >
+                                            <X size={12} />
+                                        </button>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="text-gray-600 text-xs italic">No specific goals set.</div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Divider */}
+                    <div className="h-px bg-white/5 my-4" />
+
+                    {/* Change Requests & Context */}
+                    <div className="space-y-4">
+                        {isLayout && (
+                            <div className="pt-2 animate-in fade-in slide-in-from-top-2">
+                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-3 flex items-center gap-2">
+                                    <ImageIcon size={12} className="text-purple-400" /> Global Branding Assets (Logos)
+                                    <span title="These logos will be pre-filled and used in the global header/footer.">
+                                        <Info size={10} className="text-gray-600 cursor-help" />
+                                    </span>
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {target.logos && target.logos.length > 0 ? (
+                                        target.logos.map((logo, logoIdx) => (
+                                            <div key={logoIdx} className={cn(
+                                                "relative group/logo w-20 aspect-square rounded-lg overflow-hidden border bg-black/40 transition-all",
+                                                logo.status === 'mandatory' ? "border-purple-500/50 ring-1 ring-purple-500/30" : "border-white/10"
+                                            )}>
+                                                <img src={logo.src} className="w-full h-full object-contain p-2" alt="" />
+                                                {logo.status === 'mandatory' && logoIdx === (target.logos?.findIndex(l => l.status === 'mandatory') ?? -1) && (
+                                                    <div className="absolute top-0 left-0 right-0 bg-purple-500/80 text-[8px] font-bold text-white py-0.5 text-center uppercase tracking-tighter">
+                                                        Hauptlogo
+                                                    </div>
+                                                )}
+                                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/logo:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                                                    <button
+                                                        onClick={() => {
+                                                            const newLogos = [...(target.logos || [])];
+                                                            // If setting this as mandatory, maybe we want to unset others? 
+                                                            // For now, let's keep it flexible but prioritize the first one in the prompt.
+                                                            newLogos[logoIdx] = {
+                                                                ...newLogos[logoIdx],
+                                                                status: newLogos[logoIdx].status === 'mandatory' ? 'optional' : 'mandatory'
+                                                            };
+                                                            updateTarget(target.id, { logos: newLogos });
+                                                        }}
+                                                        className={cn(
+                                                            "p-1 transition-colors",
+                                                            logo.status === 'mandatory' ? "text-purple-400" : "text-gray-400 hover:text-purple-400"
+                                                        )}
+                                                        title={logo.status === 'mandatory' ? "Status: Hauptlogo" : "Als Hauptlogo markieren"}
+                                                    >
+                                                        <Star size={12} fill={logo.status === 'mandatory' ? "currentColor" : "none"} />
+                                                    </button>
+                                                    <button
+                                                        onClick={() => {
+                                                            const newLogos = (target.logos || []).filter((_, i) => i !== logoIdx);
+                                                            updateTarget(target.id, { logos: newLogos });
+                                                        }}
+                                                        className="p-1 text-red-400 hover:text-white transition-colors"
+                                                    >
+                                                        <X size={12} />
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        ))
+                                    ) : (
+                                        <div className="text-[10px] text-gray-600 italic py-2">No logos assigned.</div>
+                                    )}
+                                    <button
+                                        onClick={() => {
+                                            setSwappingImage({ targetId: target.id, sectionIdx: -1, isLogo: true });
+                                            setTempSelectedImages((target.logos || []).map(i => i.src));
+                                        }}
+                                        className="w-20 aspect-square rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center text-gray-600 hover:text-purple-400 hover:border-purple-500/50 transition-all bg-white/5"
+                                    >
+                                        <Plus size={14} />
+                                        <span className="text-[8px] font-bold uppercase mt-1">Logo</span>
+                                    </button>
+                                </div>
+                                <div className="h-px bg-white/5 mt-6 mb-2" />
+                            </div>
+                        )}
+
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                            <Edit3 size={12} className="text-orange-400" /> Änderungswünsche (Prompt)
+                        </label>
+
+                        <Textarea
+                            value={target.user_prompt || ''} // Handle undefined
+                            onChange={(e) => handlePromptChange(target.id, e.target.value)}
+                            className="min-h-[80px] bg-black/30 border-orange-500/20 text-sm focus:border-orange-500/50 text-gray-200 placeholder:text-gray-600"
+                            placeholder="E.g. 'Add logo here', 'Make footer minimal'..."
+                        />
+
+                        {/* Detected Dependencies */}
+                        {target.dependencies && target.dependencies.length > 0 && (
+                            <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
+                                <div className="flex items-center justify-between">
+                                    <span className="text-[10px] uppercase font-bold text-blue-400">
+                                        Detected Context (Auto) 🔮
+                                    </span>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {target.dependencies.map((dep: any, dIdx: number) => {
+                                        const depPath = typeof dep === 'string' ? dep : dep.path || dep.url || `unknown-${dIdx}`;
+                                        return (
+                                            <div key={`${depPath}-${dIdx}`} className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-300">
+                                                <FileText size={10} />
+                                                {depPath}
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+
+                {/* RIGHT: Component Wireframe (The "Blueprint") */}
+                <div className="md:col-span-8 space-y-4">
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
+                        <Layout size={12} className="text-purple-400" /> {isLayout ? 'Global Component Structure' : 'Planned Component Structure'}
+                    </label>
+
+                    {
+                        target.sections && target.sections.length > 0 ? (
+                            <div className="space-y-4">
+                                {target.sections.map((section, idx) => {
+                                    const Icon = SECTION_ICONS[section.type] || SECTION_ICONS.default;
+                                    return (
+                                        <div key={idx} className="bg-black/20 border border-white/5 rounded-lg p-4 hover:border-white/10 transition-colors group">
+                                            {/* Section Header */}
+                                            <div className="flex items-start gap-3 mb-4">
+                                                <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center text-gray-400 shrink-0">
+                                                    <Icon size={16} />
+                                                </div>
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex items-center gap-2 mb-1">
+                                                        <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                                                            {section.type}
+                                                        </span>
+                                                        <h4 className="text-sm font-medium text-gray-200 truncate">
+                                                            {section.title || 'Untitled Section'}
+                                                        </h4>
+                                                    </div>
+                                                    <p className="text-xs text-gray-500 leading-relaxed">
+                                                        {section.content_hint}
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {/* Draft Content Editors */}
+                                            <div className="space-y-3 pl-11">
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Headline Draft</label>
+                                                    <Input
+                                                        value={section.headline || ''}
+                                                        onChange={(e) => {
+                                                            // Deep update of sections
+                                                            const newSections = [...(target.sections || [])];
+                                                            newSections[idx] = { ...newSections[idx], headline: e.target.value };
+                                                            updateTarget(target.id, { sections: newSections });
+                                                        }}
+                                                        className="h-8 text-sm bg-black/40 border-white/5 focus:border-blue-500/30 text-white placeholder:text-gray-700"
+                                                        placeholder="Generated headline..."
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Body Copy Draft</label>
+                                                    <Textarea
+                                                        value={section.content || ''}
+                                                        onChange={(e) => {
+                                                            const newSections = [...(target.sections || [])];
+                                                            newSections[idx] = { ...newSections[idx], content: e.target.value };
+                                                            updateTarget(target.id, { sections: newSections });
+                                                        }}
+                                                        className="min-h-[80px] text-sm bg-black/40 border-white/5 focus:border-blue-500/30 text-gray-300 placeholder:text-gray-700 resize-y"
+                                                        placeholder="Generated content draft..."
+                                                    />
+                                                </div>
+
+                                                {/* Asset selection row */}
+                                                <div className="pt-2">
+                                                    <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider block mb-2">Assigned Visuals</label>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {section.images && section.images.length > 0 ? (
+                                                            section.images.map((img, imgIdx) => (
+                                                                <div key={imgIdx} className={cn(
+                                                                    "relative group/img w-24 aspect-video rounded-lg overflow-hidden border bg-black/40 transition-all",
+                                                                    img.status === 'mandatory' ? "border-amber-500/50 ring-1 ring-amber-500/30" : "border-white/10"
+                                                                )}>
+                                                                    <img
+                                                                        src={img.src}
+                                                                        className="w-full h-full object-cover"
+                                                                        alt=""
+                                                                        title={img.src}
+                                                                        onError={(e) => {
+                                                                            (e.target as HTMLImageElement).src = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IiM1NTUiIHN0cm9rZS13aWR0aD0iMSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj48cmVjdCB4PSIyIiB5PSIyIiB3aWR0aD0iMjAiIGhlaWdodD0iMjAiIHJ4PSIyMSIgcnk9IjIxIi8+PGxpbmUgeDE9IjIxIiB5MT0iMyIgeDI9IjMiIHkyPSIyMSIvPjwvc3ZnPg==';
+                                                                        }}
+                                                                    />
+
+                                                                    {/* Status Overlay */}
+                                                                    {img.status === 'mandatory' && (
+                                                                        <div className="absolute top-1 left-1 bg-amber-500 text-black p-0.5 rounded shadow-lg z-10">
+                                                                            <Star size={8} fill="currentColor" />
+                                                                        </div>
+                                                                    )}
+
+                                                                    <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                const newSections = [...(target.sections || [])];
+                                                                                const newImgs = [...(newSections[idx].images || [])];
+                                                                                newImgs[imgIdx] = {
+                                                                                    ...newImgs[imgIdx],
+                                                                                    status: newImgs[imgIdx].status === 'mandatory' ? 'optional' : 'mandatory'
+                                                                                };
+                                                                                newSections[idx] = { ...newSections[idx], images: newImgs };
+                                                                                updateTarget(target.id, { sections: newSections });
+                                                                                toast.success(newImgs[imgIdx].status === 'mandatory' ? "Marked as Mandatory" : "Set to Optional");
+                                                                            }}
+                                                                            className={cn(
+                                                                                "p-1 transition-colors",
+                                                                                img.status === 'mandatory' ? "text-amber-400" : "text-gray-400 hover:text-amber-400"
+                                                                            )}
+                                                                            title={img.status === 'mandatory' ? "Make Optional" : "Make Mandatory"}
+                                                                        >
+                                                                            <Star size={14} fill={img.status === 'mandatory' ? "currentColor" : "none"} />
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={() => {
+                                                                                const newSections = [...(target.sections || [])];
+                                                                                const newImgs = [...(newSections[idx].images || [])];
+                                                                                newImgs.splice(imgIdx, 1);
+                                                                                newSections[idx] = { ...newSections[idx], images: newImgs };
+                                                                                updateTarget(target.id, { sections: newSections });
+                                                                            }}
+                                                                            className="p-1 text-red-400 hover:text-white transition-colors"
+                                                                            title="Remove image"
+                                                                        >
+                                                                            <X size={14} />
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            ))
+                                                        ) : (
+                                                            <div className="text-[10px] text-gray-500 italic py-1 flex items-center gap-1">
+                                                                <Sparkles size={10} className="text-purple-400" />
+                                                                <span>Auto-Mode: AI picks best match</span>
+                                                            </div>
+                                                        )}
+                                                        <button
+                                                            onClick={() => {
+                                                                setSwappingImage({ targetId: target.id, sectionIdx: idx });
+                                                                setTempSelectedImages((section.images || []).map(i => i.src));
+                                                            }}
+                                                            className="w-24 aspect-video rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center text-gray-600 hover:text-blue-400 hover:border-blue-500/50 transition-all bg-white/5"
+                                                        >
+                                                            <Plus size={14} />
+                                                            <span className="text-[8px] font-bold uppercase mt-1">Add Visual</span>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        ) : (
+                            <div className="h-full flex flex-col items-center justify-center bg-black/20 border border-white/5 rounded-xl border-dashed p-8 text-center">
+                                <Layout className="w-10 h-10 text-gray-700 mb-3" />
+                                <p className="text-sm text-gray-500 font-medium">No component structure generated yet.</p>
+                                <p className="text-xs text-gray-600 mt-1">Click "AI Refine" to generate a detailed wireframe.</p>
+                                <Button size="sm" variant="outline" className="mt-4 border-white/10 hover:bg-white/5 text-gray-400">
+                                    Generate Structure
+                                </Button>
+                            </div>
+                        )
+                    }
+                </div>
+            </div>
+        </div>
+    );
+}
 
 export function ContentReviewEditor({
     targets,
     structure,
     onUpdate,
+    onUpdateClusters,
     onApprove,
     onBack,
     sessionId,
@@ -84,10 +581,12 @@ export function ContentReviewEditor({
     currentStep,
     allImages = [],
     customAssets = [],
-    onUpload
+    onUpload,
+    clusters = []
 }: ContentReviewEditorProps) {
     const [localTargets, setLocalTargets] = useState<TargetSlot[]>(targets);
-    const [swappingImage, setSwappingImage] = useState<{ targetId: string, sectionIdx: number } | null>(null);
+    const [localClusters, setLocalClusters] = useState<any[]>(clusters);
+    const [swappingImage, setSwappingImage] = useState<{ targetId: string, sectionIdx: number, isLogo?: boolean } | null>(null);
     const [tempSelectedImages, setTempSelectedImages] = useState<string[]>([]);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -102,21 +601,41 @@ export function ContentReviewEditor({
         });
     }, [allImages, customAssets]);
 
+    // Grouped view for the gallery
+    const groupedImages = useMemo(() => {
+        const groups: Record<string, { title: string, images: any[] }> = {};
+
+        uniqueCombinedImages.forEach(img => {
+            // Filter as before: if looking for logo, show all. If looking for section image, hide obvious logos.
+            if (swappingImage && !swappingImage.isLogo && img.src.toLowerCase().includes('logo')) return;
+
+            const groupKey = img.sourceUrl || 'uploaded';
+            const groupTitle = img.sourceTitle || (img.role === 'uploaded' ? 'Hochgeladene Bilder' : 'Sonstige Assets');
+
+            if (!groups[groupKey]) {
+                groups[groupKey] = { title: groupTitle, images: [] };
+            }
+            groups[groupKey].images.push(img);
+        });
+
+        return groups;
+    }, [uniqueCombinedImages, swappingImage]);
+
     // Sync with progressive loading updates
     useEffect(() => {
         setLocalTargets(targets);
     }, [targets]);
 
-    const [regeneratingIds, setRegeneratingIds] = useState<Record<string, boolean>>({});
+    useEffect(() => {
+        setLocalClusters(clusters);
+    }, [clusters]);
 
-    // Debounce timer for auto-dependency detection
-    const [dependencyTimers, setDependencyTimers] = useState<Record<string, any>>({});
+    const [regeneratingIds, setRegeneratingIds] = useState<Record<string, boolean>>({});
 
     // Auto-save changes locally
     const updateTarget = (id: string, updates: Partial<TargetSlot>) => {
         const updated = localTargets.map(t => {
             if (t.id === id) {
-                // Gating logic: Mark as modified
                 return { ...t, ...updates, lastModifiedAt: Date.now() };
             }
             return t;
@@ -130,14 +649,11 @@ export function ContentReviewEditor({
     const handleUndo = (targetId: string) => {
         const target = localTargets.find(t => t.id === targetId);
         if (target && target.previousState) {
-            // Restore previous state but Keep History (allow toggle? No, strictly undo)
-            // Actually, we consume the state. To allow redo, we'd need redo stack.
-            // Requirement: Single Undo.
             const previous = target.previousState;
             updateTarget(targetId, {
                 ...previous,
-                previousState: undefined, // Consume undo
-                lastModifiedAt: Date.now() // Treat as modification? Or revert timestamp?
+                previousState: undefined,
+                lastModifiedAt: Date.now()
             });
             toast.success("Changes undone");
         }
@@ -149,40 +665,6 @@ export function ContentReviewEditor({
 
     const handlePromptChange = (targetId: string, prompt: string) => {
         handleFieldChange(targetId, 'user_prompt', prompt);
-
-        // Auto-detect dependencies on pause
-        /*
-        if (dependencyTimers[targetId]) clearTimeout(dependencyTimers[targetId]);
-
-        const timer = setTimeout(async () => {
-            // Only run if we have a prompt and structure
-            const t = localTargets.find(t => t.id === targetId);
-            if (!t || !t.user_prompt || !structure) return;
-
-            // Don't re-run if detected recently? (Skipping optimization for now)
-            const sitemapPaths = localTargets.map(lt => lt.path);
-
-            // Optimistic UI? Maybe just a small indicator.
-            // We won't block UI.
-            try {
-                const result = await detectDependenciesAction(t.path, t.user_prompt, sitemapPaths, sessionId);
-                if (result.success && result.data?.dependencies) {
-                    const newDeps = result.data.dependencies;
-                    // Merge unique
-                    const currentDeps = t.dependencies || [];
-                    const merged = Array.from(new Set([...currentDeps, ...newDeps]));
-
-                    if (merged.length !== currentDeps.length) {
-                        updateTarget(targetId, { dependencies: merged, dependencies_detected: true });
-                        toast.info(`Auto-detected dependencies: ${newDeps.join(', ')}`);
-                    }
-                }
-            } catch (e) { console.error(e); }
-
-        }, 1500); // 1.5s debounce
-
-        setDependencyTimers(prev => ({ ...prev, [targetId]: timer }));
-        */
     };
 
     const handleRegenerate = async (targetId: string) => {
@@ -192,39 +674,17 @@ export function ContentReviewEditor({
         setRegeneratingIds(prev => ({ ...prev, [targetId]: true }));
 
         try {
-            // 1. Prepare Context Sources
-            // Primary Source: Derived from sourceIds.
-            // Issue: target.sourceIds are IDs like "source-0". We need to find the URL.
-            // Since we don't have the original 'sources' array from DualPanelMapper prop here easily,
-            // we rely on the fact that `migrationPlan` (which generated sources) is consistent?
-            // BETTER: We look up Source Content directly via `structure`.
-            // BUT: We need the URL of the source. `target.sourceIds` map to indices?
-            // Actually, `TargetSlot` doesn't store source URLs directly by default, only IDs.
-            // CRITICAL FIX: We need source URLs in the target.
-            // In `page.tsx`, `handleGenerateSpecs` enriched targets with `sourceDetails`.
-            // DOES `localTargets` here have `sourceDetails`?
-            // Yes, if `page.tsx` passed the result of `generatePageSpecs` back to us.
-            // `page.tsx` setPageSpecs(result.data). `result.data` has `sourceDetails`.
-            // So `target.sourceDetails` should exist!
-
-            // Wait, I updated `TargetSlot` interface in `dual-panel-mapper.tsx` but did I add `sourceDetails`?
-            // I did NOT add `sourceDetails` to the interface in Step 3614.
-            // I should add `sourceDetails` to the interface too, or type as `any`.
-            // I will cast to `any` for now to avoid blocking, or quickly patch definitions later.
-
             const tAny = target as any;
             const primarySourceText = tAny.sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
 
-            // Secondary Sources: Look up content for dependencies path
-            // We need to map PATH -> CONTENT.
-            // structure.nodes have URL. `path` in dependencies is New Path.
-            // This is tricky. Dependencies point to NEW pages (e.g. /galerie).
-            // But we need content of OLD pages that feed into /galerie.
-            // Heuristic: Find a target with path == dep, get its primary sources.
-
             const secondaryContexts = (target.dependencies || []).map(depPath => {
-                // CORRECT LOGIC: Fetch from GLOBAL STRUCTURE (Crawled Data)
-                const node = structure?.nodes?.find(n => new URL(n.url).pathname === depPath);
+                const node = structure?.nodes?.find(n => {
+                    try {
+                        return new URL(n.url).pathname === depPath;
+                    } catch (e) {
+                        return false;
+                    }
+                });
                 if (node && node.content) {
                     return {
                         path: depPath,
@@ -232,7 +692,6 @@ export function ContentReviewEditor({
                     };
                 }
 
-                // Fallback: Check local targets if not found in structure (edge case)
                 const depTarget = localTargets.find(lt => lt.path === depPath);
                 if (depTarget) {
                     const content = (depTarget as any).sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
@@ -243,7 +702,6 @@ export function ContentReviewEditor({
 
             const sitemapSummary = localTargets.map(t => t.path);
 
-            // 2. Call AI
             const result = await regeneratePageSpecsAction(
                 target,
                 primarySourceText,
@@ -254,20 +712,18 @@ export function ContentReviewEditor({
             );
 
             if (result.success && result.data) {
-                // 3. Update State
                 updateTarget(targetId, {
                     ...result.data,
-                    previousState: target, // Save history
+                    previousState: target,
                     lastGeneratedAt: Date.now(),
-                    dependencies_detected: false // Reset for next time? Or keep? Keep.
+                    dependencies_detected: false
                 });
-                toast.success("Page regenerated successfully!");
+                toast.success("Regeneration successful!");
             } else {
                 toast.error("Regeneration failed: " + result.error);
             }
-
         } catch (e) {
-            toast.error("Error regenerating page");
+            toast.error("Error regenerating content");
         } finally {
             setRegeneratingIds(prev => ({ ...prev, [targetId]: false }));
         }
@@ -304,6 +760,9 @@ export function ContentReviewEditor({
         onUpdate(updated);
     };
 
+    const layoutTargets = useMemo(() => localTargets.filter(t => t.type === 'layout'), [localTargets]);
+    const pageTargets = useMemo(() => localTargets.filter(t => t.type !== 'layout'), [localTargets]);
+
     return (
         <div className="max-w-[1440px] mx-auto space-y-8 animate-in fade-in slide-in-from-right-8 pb-24">
             {/* Header */}
@@ -330,384 +789,106 @@ export function ContentReviewEditor({
                 </div>
             </div>
 
-            {/* List of Pages */}
-            <div className="grid gap-8">
-                {localTargets.map((target, index) => (
-                    <div
-                        key={target.id}
-                        className="bg-[#0A0A0B] border border-white/10 rounded-xl overflow-hidden shadow-xl"
-                    >
-                        {/* Page Header */}
-                        <div className="px-6 py-4 bg-white/5 border-b border-white/5 flex items-center justify-between">
-                            <div className="flex items-center gap-4">
-                                <div className="w-10 h-10 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400 font-mono text-lg font-bold border border-blue-500/20">
-                                    {index + 1}
-                                </div>
-                                <div>
-                                    <div className="flex items-center gap-3">
-                                        <code className="text-lg font-bold text-white tracking-tight">{target.path}</code>
-                                        <div className="flex gap-2">
-                                            <span className={cn(
-                                                "text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border",
-                                                target.action === 'keep' ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
-                                                    target.action === 'merge' ? "bg-amber-500/10 text-amber-400 border-amber-500/20" :
-                                                        "bg-blue-500/10 text-blue-400 border-blue-500/20"
-                                            )}>
-                                                {target.action}
-                                            </span>
-                                            {target.sections && (
-                                                <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border bg-purple-500/10 text-purple-400 border-purple-500/20">
-                                                    {target.sections.length} Components
-                                                </span>
-                                            )}
-                                        </div>
-                                    </div>
-                                    <div className="flex flex-col gap-2 mt-3">
-                                        {/* Row 1: Primary Merged Sources */}
-                                        <div className="flex flex-col gap-1">
-                                            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Primary Merged Content:</span>
-                                            <div className="flex flex-wrap gap-2">
-                                                {(target as any).sourceDetails?.length > 0 ? (
-                                                    (target as any).sourceDetails.map((src: any, idx: number) => (
-                                                        <div key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-gray-300 max-w-full truncate" title={src.content?.substring(0, 100)}>
-                                                            <ArrowRight className="w-3 h-3 text-gray-500" />
-                                                            <span className="truncate max-w-[200px]">{src.path || src.url || src.id || 'Unknown Source'}</span>
-                                                        </div>
-                                                    ))
-                                                ) : (
-                                                    <span className="text-xs text-gray-600">
-                                                        {target.sourceIds?.length || 0} sources (IDs: {target.sourceIds?.join(', ') || 'None'})
-                                                    </span>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        {/* Row 2: Secondary / dependencies (Context) */}
-                                        {target.dependencies && target.dependencies.length > 0 && (
-                                            <div className="flex flex-col gap-1">
-                                                <span className="text-[10px] text-blue-500/80 font-medium uppercase tracking-wider flex items-center gap-1">
-                                                    <Sparkles size={8} /> Context / Subsources:
-                                                </span>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {target.dependencies.map((dep: any, dIdx: number) => {
-                                                        const depPath = typeof dep === 'string' ? dep : dep.path || dep.url || `unknown-${dIdx}`;
-                                                        const node = structure?.nodes?.find(n => {
-                                                            try {
-                                                                return new URL(n.url).pathname === depPath;
-                                                            } catch (e) {
-                                                                return false;
-                                                            }
-                                                        });
-                                                        const imgCount = node?.content?.images?.length || 0;
-                                                        const wordCount = node?.content?.rawText?.split(/\s+/)?.length || 0;
-
-                                                        return (
-                                                            <div key={`${depPath}-${dIdx}`} className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-300 transition-colors hover:bg-blue-500/20 cursor-help"
-                                                                title={`${imgCount} Images available, ~${wordCount} words of text context.`}>
-                                                                <BrainCircuit size={10} />
-                                                                <span className="font-mono">{depPath}</span>
-                                                                <span className="text-[10px] text-blue-400/60 ml-1">
-                                                                    ({imgCount} Imgs)
-                                                                </span>
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* Actions Area */}
-                            <div className="flex items-center gap-2">
-                                {/* Undo Button */}
-                                {target.previousState && (
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => handleUndo(target.id)}
-                                        className="border-white/10 text-gray-400 hover:text-white hover:bg-white/5"
-                                        title="Undo last regeneration"
-                                    >
-                                        <RotateCcw size={14} className="mr-2" /> Undo
-                                    </Button>
-                                )}
-
-                                {/* Regenerate Button */}
-                                <Button
-                                    size="sm"
-                                    onClick={() => handleRegenerate(target.id)}
-                                    disabled={regeneratingIds[target.id]}
-                                    className={cn(
-                                        "font-medium border border-blue-500/30",
-                                        target.lastModifiedAt && (!target.lastGeneratedAt || target.lastModifiedAt > target.lastGeneratedAt)
-                                            ? "bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-900/40 animate-pulse" // Highlight if modified
-                                            : "bg-blue-500/10 hover:bg-blue-500/20 text-blue-400"
-                                    )}
-                                >
-                                    {regeneratingIds[target.id] ? (
-                                        <><Loader2 size={14} className="mr-2 animate-spin" /> Generating...</>
-                                    ) : (
-                                        <><RefreshCw size={14} className="mr-2" /> Neu Generieren</>
-                                    )}
-                                </Button>
-                            </div>
-                        </div>
-
-                        <div className="p-6 grid grid-cols-1 md:grid-cols-12 gap-8 items-start">
-
-                            {/* LEFT: Strategy & Goals (The "Briefing") */}
-                            <div className="md:col-span-4 space-y-6 md:border-r border-b md:border-b-0 border-white/5 md:pr-6 pb-6 md:pb-0">
-                                <div className="space-y-3">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                                        <Sparkles size={12} className="text-blue-400" /> Page Strategy
-                                    </label>
-                                    <Textarea
-                                        value={target.description || ''}
-                                        onChange={(e) => handleFieldChange(target.id, 'description', e.target.value)}
-                                        className="min-h-[120px] bg-black/30 border-white/10 text-sm leading-relaxed text-gray-300 resize-none focus:border-blue-500/50"
-                                        placeholder="AI will generate a briefing here..."
-                                    />
-                                </div>
-
-                                <div className="space-y-3">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center justify-between">
-                                        Content Goals
-                                        <Button
-                                            onClick={() => addGoal(target.id)}
-                                            size="sm"
-                                            variant="ghost"
-                                            className="h-5 px-2 text-[10px] text-blue-400 hover:text-blue-300 hover:bg-blue-500/10"
-                                        >
-                                            <Plus size={10} className="mr-1" /> Add
-                                        </Button>
-                                    </label>
-                                    <div className="space-y-2">
-                                        {target.content_goals && target.content_goals.length > 0 ? (
-                                            target.content_goals.map((goal, i) => (
-                                                <div key={i} className="flex items-start gap-2 group/goal">
-                                                    <div className="mt-2 w-1.5 h-1.5 rounded-full bg-blue-500/40 shrink-0" />
-                                                    <Input
-                                                        value={goal}
-                                                        onChange={(e) => handleGoalChange(target.id, i, e.target.value)}
-                                                        className="h-7 text-sm bg-transparent border-0 border-b border-white/5 focus:border-blue-500/30 rounded-none px-0 py-1 shadow-none text-gray-300 placeholder:text-gray-700"
-                                                    />
-                                                    <button
-                                                        onClick={() => removeGoal(target.id, i)}
-                                                        className="mt-1.5 opacity-0 group-hover/goal:opacity-100 text-gray-600 hover:text-red-400 transition-opacity"
-                                                    >
-                                                        <X size={12} />
-                                                    </button>
-                                                </div>
-                                            ))
-                                        ) : (
-                                            <div className="text-gray-600 text-xs italic">No specific goals set.</div>
-                                        )}
-                                    </div>
-                                </div>
-
-                                {/* Divider */}
-                                <div className="h-px bg-white/5 my-4" />
-
-                                {/* Change Requests & Context */}
-                                <div className="space-y-4">
-                                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                                        <Edit3 size={12} className="text-orange-400" /> Änderungswünsche (Prompt)
-                                    </label>
-
-                                    <Textarea
-                                        value={target.user_prompt || ''} // Handle undefined
-                                        onChange={(e) => handlePromptChange(target.id, e.target.value)}
-                                        className="min-h-[80px] bg-black/30 border-orange-500/20 text-sm focus:border-orange-500/50 text-gray-200 placeholder:text-gray-600"
-                                        placeholder="E.g. 'Make it punchier', 'Add Gallery Teaser'..."
-                                    />
-
-                                    {/* Detected Dependencies */}
-                                    {target.dependencies && target.dependencies.length > 0 && (
-                                        <div className="space-y-2 animate-in fade-in slide-in-from-top-2">
-                                            <div className="flex items-center justify-between">
-                                                <span className="text-[10px] uppercase font-bold text-blue-400">
-                                                    Detected Context (Auto) 🔮
-                                                </span>
-                                            </div>
-                                            <div className="flex flex-wrap gap-2">
-                                                {target.dependencies.map((dep: any, dIdx: number) => {
-                                                    const depPath = typeof dep === 'string' ? dep : dep.path || dep.url || `unknown-${dIdx}`;
-                                                    return (
-                                                        <div key={`${depPath}-${dIdx}`} className="flex items-center gap-1.5 px-2 py-1 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-300">
-                                                            <FileText size={10} />
-                                                            {depPath}
-                                                        </div>
-                                                    );
-                                                })}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-
-
-                            {/* RIGHT: Component Wireframe (The "Blueprint") */}
-                            <div className="md:col-span-8 space-y-4">
-                                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider flex items-center gap-2">
-                                    <Layout size={12} className="text-purple-400" /> Planned Component Structure
-                                </label>
-
-                                {
-                                    target.sections && target.sections.length > 0 ? (
-                                        <div className="space-y-4">
-                                            {target.sections.map((section, idx) => {
-                                                const Icon = SECTION_ICONS[section.type] || SECTION_ICONS.default;
-                                                return (
-                                                    <div key={idx} className="bg-black/20 border border-white/5 rounded-lg p-4 hover:border-white/10 transition-colors group">
-                                                        {/* Section Header */}
-                                                        <div className="flex items-start gap-3 mb-4">
-                                                            <div className="w-8 h-8 rounded bg-white/5 flex items-center justify-center text-gray-400 shrink-0">
-                                                                <Icon size={16} />
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="flex items-center gap-2 mb-1">
-                                                                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
-                                                                        {section.type}
-                                                                    </span>
-                                                                    <h4 className="text-sm font-medium text-gray-200 truncate">
-                                                                        {section.title || 'Untitled Section'}
-                                                                    </h4>
-                                                                </div>
-                                                                <p className="text-xs text-gray-500 leading-relaxed">
-                                                                    {section.content_hint}
-                                                                </p>
-                                                            </div>
-                                                        </div>
-
-                                                        {/* Draft Content Editors */}
-                                                        <div className="space-y-3 pl-11">
-                                                            <div className="space-y-1">
-                                                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Headline Draft</label>
-                                                                <Input
-                                                                    value={section.headline || ''}
-                                                                    onChange={(e) => {
-                                                                        // Deep update of sections
-                                                                        const newSections = [...(target.sections || [])];
-                                                                        newSections[idx] = { ...newSections[idx], headline: e.target.value };
-                                                                        updateTarget(target.id, { sections: newSections });
-                                                                    }}
-                                                                    className="h-8 text-sm bg-black/40 border-white/5 focus:border-blue-500/30 text-white placeholder:text-gray-700"
-                                                                    placeholder="Generated headline..."
-                                                                />
-                                                            </div>
-                                                            <div className="space-y-1">
-                                                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider">Body Copy Draft</label>
-                                                                <Textarea
-                                                                    value={section.content || ''}
-                                                                    onChange={(e) => {
-                                                                        const newSections = [...(target.sections || [])];
-                                                                        newSections[idx] = { ...newSections[idx], content: e.target.value };
-                                                                        updateTarget(target.id, { sections: newSections });
-                                                                    }}
-                                                                    className="min-h-[80px] text-sm bg-black/40 border-white/5 focus:border-blue-500/30 text-gray-300 placeholder:text-gray-700 resize-y"
-                                                                    placeholder="Generated content draft..."
-                                                                />
-                                                            </div>
-
-                                                            {/* Asset selection row */}
-                                                            <div className="pt-2">
-                                                                <label className="text-[10px] font-bold text-gray-600 uppercase tracking-wider block mb-2">Assigned Visuals</label>
-                                                                <div className="flex flex-wrap gap-2">
-                                                                    {section.images && section.images.length > 0 ? (
-                                                                        section.images.map((img, imgIdx) => (
-                                                                            <div key={imgIdx} className={cn(
-                                                                                "relative group/img w-24 aspect-video rounded-lg overflow-hidden border bg-black/40 transition-all",
-                                                                                img.status === 'mandatory' ? "border-amber-500/50 ring-1 ring-amber-500/30" : "border-white/10"
-                                                                            )}>
-                                                                                <img src={img.src} className="w-full h-full object-cover" alt="" />
-
-                                                                                {/* Status Overlay */}
-                                                                                {img.status === 'mandatory' && (
-                                                                                    <div className="absolute top-1 left-1 bg-amber-500 text-black p-0.5 rounded shadow-lg z-10">
-                                                                                        <Star size={8} fill="currentColor" />
-                                                                                    </div>
-                                                                                )}
-
-                                                                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center gap-1">
-                                                                                    <button
-                                                                                        onClick={() => {
-                                                                                            const newSections = [...(target.sections || [])];
-                                                                                            const newImgs = [...(newSections[idx].images || [])];
-                                                                                            newImgs[imgIdx] = {
-                                                                                                ...newImgs[imgIdx],
-                                                                                                status: newImgs[imgIdx].status === 'mandatory' ? 'optional' : 'mandatory'
-                                                                                            };
-                                                                                            newSections[idx] = { ...newSections[idx], images: newImgs };
-                                                                                            updateTarget(target.id, { sections: newSections });
-                                                                                            toast.success(newImgs[imgIdx].status === 'mandatory' ? "Marked as Mandatory" : "Set to Optional");
-                                                                                        }}
-                                                                                        className={cn(
-                                                                                            "p-1 transition-colors",
-                                                                                            img.status === 'mandatory' ? "text-amber-400" : "text-gray-400 hover:text-amber-400"
-                                                                                        )}
-                                                                                        title={img.status === 'mandatory' ? "Make Optional" : "Make Mandatory"}
-                                                                                    >
-                                                                                        <Star size={14} fill={img.status === 'mandatory' ? "currentColor" : "none"} />
-                                                                                    </button>
-                                                                                    <button
-                                                                                        onClick={() => {
-                                                                                            const newSections = [...(target.sections || [])];
-                                                                                            const newImgs = [...(newSections[idx].images || [])];
-                                                                                            newImgs.splice(imgIdx, 1);
-                                                                                            newSections[idx] = { ...newSections[idx], images: newImgs };
-                                                                                            updateTarget(target.id, { sections: newSections });
-                                                                                        }}
-                                                                                        className="p-1 text-red-400 hover:text-white transition-colors"
-                                                                                        title="Remove image"
-                                                                                    >
-                                                                                        <X size={14} />
-                                                                                    </button>
-                                                                                </div>
-                                                                            </div>
-                                                                        ))
-                                                                    ) : (
-                                                                        <div className="text-[10px] text-gray-500 italic py-1 flex items-center gap-1">
-                                                                            <Sparkles size={10} className="text-purple-400" />
-                                                                            <span>Auto-Mode: AI picks best match</span>
-                                                                        </div>
-                                                                    )}
-                                                                    <button
-                                                                        onClick={() => {
-                                                                            setSwappingImage({ targetId: target.id, sectionIdx: idx });
-                                                                            setTempSelectedImages((section.images || []).map(i => i.src));
-                                                                        }}
-                                                                        className="w-24 aspect-video rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center text-gray-600 hover:text-blue-400 hover:border-blue-500/50 transition-all bg-white/5"
-                                                                    >
-                                                                        <Plus size={14} />
-                                                                        <span className="text-[8px] font-bold uppercase mt-1">Add Visual</span>
-                                                                    </button>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })}
-                                        </div>
-                                    ) : (
-                                        <div className="h-full flex flex-col items-center justify-center bg-black/20 border border-white/5 rounded-xl border-dashed p-8 text-center">
-                                            <Layout className="w-10 h-10 text-gray-700 mb-3" />
-                                            <p className="text-sm text-gray-500 font-medium">No component structure generated yet.</p>
-                                            <p className="text-xs text-gray-600 mt-1">Click "AI Refine" to generate a detailed wireframe.</p>
-                                            <Button size="sm" variant="outline" className="mt-4 border-white/10 hover:bg-white/5 text-gray-400">
-                                                Generate Structure
-                                            </Button>
-                                        </div>
-                                    )
-                                }
-                            </div>
-                        </div>
+            {/* 1. Global Layout & Branding Section */}
+            {layoutTargets.length > 0 && (
+                <div className="space-y-6">
+                    <div className="flex items-center gap-3 px-1">
+                        <div className="w-1.5 h-6 bg-purple-500 rounded-full" />
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                            Global Layout Strategy
+                            <span className="text-[10px] text-purple-400 border border-purple-500/30 px-2 py-0.5 rounded-full uppercase tracking-widest font-mono">Systemic Elements</span>
+                        </h3>
                     </div>
 
-                ))}
+                    <div className="grid gap-6">
+                        {layoutTargets.map((target, index) => (
+                            <ReviewCard
+                                key={target.id}
+                                target={target}
+                                index={index}
+                                isLayout={true}
+                                structure={structure}
+                                regeneratingIds={regeneratingIds}
+                                SECTION_ICONS={SECTION_ICONS}
+                                handleUndo={handleUndo}
+                                handleRegenerate={handleRegenerate}
+                                handleFieldChange={handleFieldChange}
+                                handleGoalChange={handleGoalChange}
+                                addGoal={addGoal}
+                                removeGoal={removeGoal}
+                                handlePromptChange={handlePromptChange}
+                                updateTarget={updateTarget}
+                                setSwappingImage={setSwappingImage}
+                                setTempSelectedImages={setTempSelectedImages}
+                            />
+                        ))}
+                    </div>
 
-                {/* LOADING PLACEHOLDER FOR NEXT PAGE */}
+                    <div className="h-px bg-white/5 mx-4" />
+                </div>
+            )}
+
+            {/* List of Clusters */}
+            {localClusters.length > 0 && (
+                <div className="space-y-6">
+                    <div className="flex items-center gap-3 px-1">
+                        <div className="w-1.5 h-6 bg-amber-500 rounded-full" />
+                        <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                            Cluster Content Strategy
+                            <span className="text-[10px] text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded-full uppercase tracking-widest font-mono">Pattern Based</span>
+                        </h3>
+                    </div>
+                    <div className="space-y-8">
+                        {localClusters.map((cluster) => (
+                            <ClusterReviewCard
+                                key={cluster.id}
+                                cluster={cluster}
+                                structure={structure}
+                                onUpdate={(updated) => {
+                                    const newClusters = localClusters.map(c => c.id === updated.id ? updated : c);
+                                    setLocalClusters(newClusters);
+                                    if (onUpdateClusters) onUpdateClusters(newClusters);
+                                }}
+                            />
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* List of Pages */}
+            <div className="space-y-6">
+                <div className="flex items-center gap-3 px-1">
+                    <div className="w-1.5 h-6 bg-blue-500 rounded-full" />
+                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                        Individual Content Strategy
+                        <span className="text-[10px] text-blue-400 border border-blue-500/30 px-2 py-0.5 rounded-full uppercase tracking-widest font-mono">Unique Pages</span>
+                    </h3>
+                </div>
+
+                <div className="grid gap-8">
+                    {pageTargets.map((target, index) => (
+                        <ReviewCard
+                            key={target.id}
+                            target={target}
+                            index={index}
+                            isLayout={false}
+                            structure={structure}
+                            regeneratingIds={regeneratingIds}
+                            SECTION_ICONS={SECTION_ICONS}
+                            handleUndo={handleUndo}
+                            handleRegenerate={handleRegenerate}
+                            handleFieldChange={handleFieldChange}
+                            handleGoalChange={handleGoalChange}
+                            addGoal={addGoal}
+                            removeGoal={removeGoal}
+                            handlePromptChange={handlePromptChange}
+                            updateTarget={updateTarget}
+                            setSwappingImage={setSwappingImage}
+                            setTempSelectedImages={setTempSelectedImages}
+                        />
+                    ))}
+                </div>
+
                 {isGenerating && (
                     <div className="bg-[#0A0A0B]/50 border border-white/5 rounded-xl p-12 flex flex-col items-center justify-center text-center space-y-4 animate-pulse border-dashed">
                         <div className="relative">
@@ -726,159 +907,191 @@ export function ContentReviewEditor({
                 )}
             </div>
 
-
-            {/* Image Swap Modal / Overlay */}
-            {
-                swappingImage && (
-                    <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl animate-in fade-in flex items-center justify-center p-8">
-                        <div className="bg-[#0D0D12] border border-white/10 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
-                            <div className="p-6 border-b border-white/5 flex items-center justify-between">
-                                <div>
-                                    <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                                        <Sparkles className="text-blue-400" /> Choose Section Asset
-                                    </h3>
-                                    <p className="text-xs text-gray-500 mt-1">Select an image from the crawled content or upload your own to use in this section.</p>
-                                </div>
-                                <div className="flex items-center gap-3">
-                                    <input
-                                        type="file"
-                                        ref={fileInputRef}
-                                        className="hidden"
-                                        accept="image/*"
-                                        onChange={(e) => {
-                                            const file = e.target.files?.[0];
-                                            if (file) {
-                                                const reader = new FileReader();
-                                                reader.onload = (event) => {
-                                                    const src = event.target?.result as string;
-                                                    const newImg = { src, alt: file.name, role: 'uploaded' };
-                                                    if (onUpload) onUpload(newImg);
-                                                    setTempSelectedImages(prev => [...prev, src]);
-                                                    toast.success("Image uploaded and selected!");
-                                                };
-                                                reader.readAsDataURL(file);
-                                            }
-                                        }}
-                                    />
-                                    <Button
-                                        variant="outline"
-                                        size="sm"
-                                        onClick={() => fileInputRef.current?.click()}
-                                        className="border-blue-500/30 bg-blue-500/5 text-blue-400 hover:bg-blue-500/10 hover:border-blue-500/50 gap-2"
-                                    >
-                                        <Upload size={16} />
-                                        Upload Image
-                                    </Button>
-                                    <Button variant="ghost" size="icon" onClick={() => setSwappingImage(null)} className="text-gray-400 hover:text-white">
-                                        <X size={20} />
-                                    </Button>
-                                </div>
+            {/* Image Swap Modal */}
+            {swappingImage && (
+                <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-xl animate-in fade-in flex items-center justify-center p-8">
+                    <div className="bg-[#0D0D12] border border-white/10 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[80vh] flex flex-col overflow-hidden">
+                        <div className="p-6 border-b border-white/5 flex items-center justify-between">
+                            <div>
+                                <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                    <Sparkles className="text-blue-400" /> Choose Section Asset
+                                </h3>
+                                <p className="text-xs text-gray-500 mt-1">Select an image from the crawled content or upload your own.</p>
                             </div>
+                            <div className="flex items-center gap-3">
+                                <input
+                                    type="file"
+                                    ref={fileInputRef}
+                                    className="hidden"
+                                    accept="image/*"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                            const reader = new FileReader();
+                                            reader.onload = (event) => {
+                                                const src = event.target?.result as string;
+                                                const newImg = { src, alt: file.name, role: 'uploaded' };
+                                                if (onUpload) onUpload(newImg);
+                                                setTempSelectedImages(prev => [...prev, src]);
+                                                toast.success("Image uploaded!");
+                                            };
+                                            reader.readAsDataURL(file);
+                                        }
+                                    }}
+                                />
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className="border-blue-500/30 bg-blue-500/5 text-blue-400 hover:bg-blue-500/10 gap-2"
+                                >
+                                    <Upload size={16} />
+                                    Upload Image
+                                </Button>
+                                <Button variant="ghost" size="icon" onClick={() => setSwappingImage(null)} className="text-gray-400 hover:text-white">
+                                    <X size={20} />
+                                </Button>
+                            </div>
+                        </div>
 
-                            <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
-                                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                                    {uniqueCombinedImages
-                                        .filter(i => i.src && !i.src.includes('logo'))
-                                        .map((altImg, idx) => {
-                                            const isSelected = tempSelectedImages.includes(altImg.src);
-                                            const isUploaded = altImg.role === 'uploaded';
-                                            return (
-                                                <button
-                                                    key={idx}
-                                                    onClick={() => {
-                                                        setTempSelectedImages(prev =>
-                                                            prev.includes(altImg.src)
-                                                                ? prev.filter(s => s !== altImg.src)
-                                                                : [...prev, altImg.src]
-                                                        );
-                                                    }}
-                                                    className={cn(
-                                                        "group relative aspect-square bg-white/5 rounded-xl border transition-all hover:scale-[1.02] shadow-lg overflow-hidden",
-                                                        isSelected ? "border-blue-500 ring-2 ring-blue-500/50" : "border-white/5 hover:border-white/20"
-                                                    )}
-                                                >
-                                                    <img
-                                                        src={altImg.src}
-                                                        alt={altImg.alt}
+                        <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                            <div className="space-y-10">
+                                {Object.entries(groupedImages).map(([groupKey, group]) => (
+                                    <div key={groupKey} className="space-y-4">
+                                        <div className="flex items-center gap-3">
+                                            <div className="h-4 w-1 bg-blue-500 rounded-full" />
+                                            <h4 className="text-sm font-bold text-white flex items-center gap-2">
+                                                {group.title}
+                                                <span className="text-[10px] text-zinc-500 font-mono">({group.images.length})</span>
+                                            </h4>
+                                            <div className="flex-1 h-px bg-white/5" />
+                                        </div>
+                                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
+                                            {group.images.map((altImg, idx) => {
+                                                const isSelected = tempSelectedImages.includes(altImg.src);
+                                                return (
+                                                    <button
+                                                        key={idx}
+                                                        onClick={() => {
+                                                            setTempSelectedImages(prev =>
+                                                                prev.includes(altImg.src)
+                                                                    ? prev.filter(s => s !== altImg.src)
+                                                                    : [...prev, altImg.src]
+                                                            );
+                                                        }}
                                                         className={cn(
-                                                            "w-full h-full object-cover transition-transform duration-700",
-                                                            isSelected ? "scale-105 opacity-60" : "group-hover:scale-110"
+                                                            "group relative aspect-square bg-white/5 rounded-xl border transition-all hover:scale-[1.02] overflow-hidden",
+                                                            isSelected ? "border-blue-500 ring-2 ring-blue-500/50" : "border-white/5 hover:border-white/20"
                                                         )}
-                                                    />
-
-                                                    {/* Uploaded Badge */}
-                                                    {isUploaded && (
-                                                        <div className="absolute top-2 left-2 bg-blue-500/80 backdrop-blur-md text-white text-[8px] font-bold px-1.5 py-0.5 rounded uppercase tracking-tighter z-10">
-                                                            Uploaded
+                                                    >
+                                                        <img src={altImg.src} alt={altImg.alt} className="w-full h-full object-cover" />
+                                                        <div className={cn(
+                                                            "absolute inset-0 flex items-center justify-center transition-all",
+                                                            isSelected ? "bg-blue-600/20 opacity-100" : "bg-black/40 opacity-0 group-hover:opacity-100"
+                                                        )}>
+                                                            {isSelected ? (
+                                                                <div className="bg-blue-500 text-white p-1.5 rounded-full">
+                                                                    <Check size={16} strokeWidth={3} />
+                                                                </div>
+                                                            ) : (
+                                                                <div className="bg-white/90 text-black px-2 py-1 rounded text-[10px] font-bold">SELECT</div>
+                                                            )}
                                                         </div>
-                                                    )}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
 
-                                                    {/* Selection Badge */}
-                                                    <div className={cn(
-                                                        "absolute inset-0 flex items-center justify-center transition-all",
-                                                        isSelected ? "bg-blue-600/20 opacity-100" : "bg-black/40 opacity-0 group-hover:opacity-100"
-                                                    )}>
-                                                        {isSelected ? (
-                                                            <div className="bg-blue-500 text-white p-1.5 rounded-full shadow-lg scale-110">
-                                                                <Check size={16} strokeWidth={3} />
-                                                            </div>
-                                                        ) : (
-                                                            <div className="bg-white/90 text-black px-2 py-1 rounded text-[10px] font-bold">SELECT</div>
-                                                        )}
-                                                    </div>
-
-                                                    {/* Index Ribbon for Multi-select */}
-                                                    {isSelected && (
-                                                        <div className="absolute top-2 right-2 bg-blue-500 text-white text-[10px] font-bold w-5 h-5 flex items-center justify-center rounded-full border border-white/20">
-                                                            {tempSelectedImages.indexOf(altImg.src) + 1}
-                                                        </div>
-                                                    )}
-                                                </button>
-                                            );
-                                        })}
-                                </div>
+                                {Object.keys(groupedImages).length === 0 && (
+                                    <div className="text-center py-20 bg-white/5 rounded-2xl border border-dashed border-white/10">
+                                        <div className="text-gray-500 italic">Keine passenden Bilder gefunden.</div>
+                                    </div>
+                                )}
                             </div>
-                            <div className="p-4 bg-[#0A0A0E] border-t border-white/5 flex items-center justify-between">
-                                <div className="text-xs text-gray-500">
-                                    <span className="font-bold text-blue-400">{tempSelectedImages.length}</span> images selected
-                                </div>
-                                <div className="flex gap-2">
-                                    <Button variant="outline" onClick={() => setSwappingImage(null)} className="border-white/10 text-gray-400">
-                                        Cancel
-                                    </Button>
-                                    <Button
-                                        onClick={() => {
-                                            const { targetId, sectionIdx } = swappingImage;
-                                            const target = localTargets.find(t => t.id === targetId);
-                                            if (target) {
+                        </div>
+                        <div className="p-4 bg-[#0A0A0E] border-t border-white/5 flex items-center justify-between">
+                            <div className="text-xs text-gray-500">
+                                <span className="font-bold text-blue-400">{tempSelectedImages.length}</span> images selected
+                            </div>
+                            <div className="flex gap-2">
+                                <Button variant="outline" onClick={() => setSwappingImage(null)} className="border-white/10 text-gray-400">
+                                    Cancel
+                                </Button>
+                                <Button
+                                    onClick={() => {
+                                        const { targetId, sectionIdx, isLogo } = swappingImage;
+                                        const target = localTargets.find(t => t.id === targetId);
+                                        if (target) {
+                                            if (isLogo) {
+                                                const existingLogos = target.logos || [];
+                                                const newLogos: SectionImage[] = tempSelectedImages.map(src => {
+                                                    const existing = existingLogos.find(el => el.src === src);
+                                                    return { src, status: existing?.status || 'mandatory' };
+                                                });
+                                                updateTarget(targetId, { logos: newLogos });
+                                            } else {
                                                 const newSections = [...(target.sections || [])];
                                                 const existingImgs = newSections[sectionIdx].images || [];
-
-                                                // Map temp strings to SectionImage objects, preserving mandatory status if already exists
                                                 const newImgs: SectionImage[] = tempSelectedImages.map(src => {
                                                     const existing = existingImgs.find(ei => ei.src === src);
-                                                    return {
-                                                        src,
-                                                        status: existing?.status || 'optional'
-                                                    };
+                                                    return { src, status: existing?.status || 'optional' };
                                                 });
-
                                                 newSections[sectionIdx] = { ...newSections[sectionIdx], images: newImgs };
                                                 updateTarget(targetId, { sections: newSections });
-                                                toast.success(`${newImgs.length} Visuals assigned to section`);
                                             }
-                                            setSwappingImage(null);
-                                        }}
-                                        className="bg-blue-600 hover:bg-blue-500 text-white min-w-[140px]"
-                                    >
-                                        Confirm Selection
-                                    </Button>
-                                </div>
+                                        }
+                                        setSwappingImage(null);
+                                    }}
+                                    className="bg-blue-600 hover:bg-blue-500 text-white min-w-[140px]"
+                                >
+                                    Confirm Selection
+                                </Button>
                             </div>
                         </div>
                     </div>
-                )
-            }
-        </div >
+                </div>
+            )}
+
+            {/* Global Progress Overlay */}
+            {isGenerating && (
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[90] animate-in slide-in-from-bottom-8 fade-in">
+                    <div className="bg-[#0D0D12]/90 backdrop-blur-2xl border border-blue-500/30 rounded-2xl shadow-2xl p-4 px-6 flex items-center gap-6 min-w-[400px]">
+                        <div className="relative">
+                            <div className="absolute inset-0 bg-blue-500 blur-lg opacity-20 animate-pulse" />
+                            <div className="relative bg-blue-500/10 border border-blue-500/20 rounded-lg p-2">
+                                <BrainCircuit className="w-5 h-5 text-blue-400" />
+                            </div>
+                        </div>
+                        <div className="flex-1 space-y-2">
+                            <div className="flex items-center justify-between text-[10px] font-bold uppercase">
+                                <span className="text-blue-400 flex items-center gap-2">
+                                    <span className="flex h-1.5 w-1.5 rounded-full bg-blue-500 animate-ping" />
+                                    AI Architect Working
+                                </span>
+                                <span className="text-zinc-500 font-mono">
+                                    {currentProgress} / {totalProgress} Finished
+                                </span>
+                            </div>
+                            <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                                <div
+                                    className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-1000"
+                                    style={{ width: `${((currentProgress || 0) / (totalProgress || 1)) * 100}%` }}
+                                />
+                            </div>
+                            <div className="text-[11px] text-zinc-400 truncate max-w-[280px]">
+                                {currentStep || "Refining content strategy..."}
+                            </div>
+                        </div>
+                        <div className="pl-4 border-l border-white/10 text-center min-w-[60px]">
+                            <div className="text-lg font-bold text-white font-mono">
+                                {Math.round(((currentProgress || 0) / (totalProgress || 1)) * 100)}%
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
     );
 }

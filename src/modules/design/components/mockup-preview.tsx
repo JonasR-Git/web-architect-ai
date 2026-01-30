@@ -323,14 +323,6 @@ export function MockupPreview({
                         Assets ({extractedImages.length})
                     </button>
 
-                    {activeVariant && onSelectionConfirm && !isLoading && (
-                        <button
-                            onClick={() => onSelectionConfirm(activeVariant)}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-1.5 rounded-lg text-xs font-bold transition-all shadow-lg shadow-emerald-900/20 flex items-center gap-2"
-                        >
-                            Select & Continue <ChevronLeft className="w-3 h-3 rotate-180" />
-                        </button>
-                    )}
 
                     {isLoading && (
                         <div className="flex items-center gap-2 text-xs text-purple-400 bg-purple-500/10 px-3 py-1.5 rounded-lg border border-purple-500/20">
@@ -385,8 +377,9 @@ export function MockupPreview({
                                 </div>
 
                                 {activeVariantId === item.id && (
-                                    <div className="absolute top-0 right-0 p-2 text-blue-400">
+                                    <div className="absolute top-0 right-0 p-2 flex flex-col items-end gap-1">
                                         <div className="w-2 h-2 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(59,130,246,0.8)]" />
+                                        <span className="text-[8px] font-bold text-blue-400 bg-blue-400/10 px-1 rounded border border-blue-400/20">ACTIVE</span>
                                     </div>
                                 )}
                             </button>

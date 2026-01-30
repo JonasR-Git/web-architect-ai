@@ -39,6 +39,8 @@ export type SessionData = {
 
     // 6. User Assets
     customAssets?: any[];
+    excludedUrls?: string[];
+    clusterOverrides?: any; // ClusterOverrides type
 };
 
 export type SessionSummary = {

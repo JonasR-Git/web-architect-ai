@@ -102,7 +102,10 @@ export function auditPage(node: SiteNode): AuditResult {
     else intScore += Math.max(0, 20 - (invalidImgs * 5));
 
     const accTotalForms = node.content.forms.length;
-    const invalidForms = node.content.forms.filter(f => !f.hasLabel).length;
+    // Check if forms have fields without labels
+    const invalidForms = node.content.forms.filter(f =>
+        f.fields && f.fields.some(field => !field.label && field.required)
+    ).length;
     if (accTotalForms === 0 || invalidForms === 0) intScore += 20;
     else intScore -= 10; // Penalty for forms
 

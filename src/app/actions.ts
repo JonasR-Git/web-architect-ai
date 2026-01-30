@@ -2,8 +2,9 @@
 
 import { WebCrawler } from '@/modules/analysis/crawler/crawler';
 import { AIService } from '@/modules/core/ai-service';
-import { SiteStructure, StackConfig, DesignConfig, ComponentSpecification } from '@/types';
-import { optimizeStructureForAI } from '@/modules/engineering/services/structure-optimizer';
+import { SiteStructure, StackConfig, DesignConfig, ComponentSpecification, ClusterOverrides, ClusterSpec, PageInstance } from '@/types';
+import { groupSimilarPages } from '@/modules/core/utils/grouping';
+import { normalizeUrlToConcept, normalizeStructureToConcepts, SemanticMergeMap } from '@/modules/core/utils/normalization';
 import { downloadImageAsBase64 } from '@/lib/image-downloader';
 import { STYLE_EXTRACTOR_SYSTEM_PROMPT } from '@/modules/core/prompts/analysis';
 import {
@@ -29,30 +30,95 @@ export async function startCrawlAction(url: string) {
     }
 
     try {
-        const crawler = new WebCrawler({ maxPages: 25, maxDepth: 2 });
+        const crawler = new WebCrawler({ maxPages: 2500, maxDepth: 10 });
         // Start the crawl processing
         const structure = await crawler.start(url);
-        return { success: true, data: structure };
+
+        // --- SEMANTIC BRANCH ANALYSIS ---
+        // 1. Extract Branch Candidates (Top-level folders)
+        const branches: any[] = [];
+        const seenPaths = new Set();
+
+        // Language prefixes to skip (they're handled by language normalization, not branch merging)
+        const langPrefixes = new Set([
+            'de', 'en', 'fr', 'es', 'it', 'pt', 'nl', 'pl', 'ru', 'zh', 'ja', 'ko',
+            'ar', 'tr', 'sv', 'no', 'da', 'fi', 'cs', 'hu', 'ro', 'el', 'hr', 'sk',
+            'english', 'deutsch', 'german', 'french', 'spanish', 'italian', 'portuguese',
+            'dutch', 'polish', 'russian', 'chinese', 'japanese', 'korean',
+        ]);
+
+        structure.nodes.forEach(node => {
+            try {
+                const u = new URL(node.url);
+                const path = u.pathname;
+                const parts = path.split('/').filter(Boolean);
+
+                // Skip pure language roots (e.g., /en, /de, /english)
+                if (parts.length === 1 && langPrefixes.has(parts[0].toLowerCase())) {
+                    return;
+                }
+
+                // For depth-2 paths under language prefixes (e.g., /en/services),
+                // use the non-language part as the branch (e.g., /services)
+                let branchParts = parts;
+                if (parts.length >= 1 && langPrefixes.has(parts[0].toLowerCase())) {
+                    branchParts = parts.slice(1); // Strip language prefix
+                }
+
+                if (branchParts.length >= 1 && branchParts.length <= 2) {
+                    const branchPath = '/' + branchParts.join('/');
+                    if (!seenPaths.has(branchPath)) {
+                        seenPaths.add(branchPath);
+                        branches.push({
+                            id: branchParts.join('-'),
+                            path: branchPath,
+                            sample: node.url
+                        });
+                    }
+                }
+            } catch (e) { }
+        });
+
+        // 2. AI Analysis
+        let semanticMerges: { merges: any[] } = { merges: [] };
+        if (branches.length > 0) {
+            console.log(`[BranchAnalysis] Analyzing ${branches.length} potential branches...`);
+            const ai = new AIService();
+            const rawMerges = await ai.analyzeBranchStructure(branches) as any;
+
+            // Safety: Filter out single-source "renames" and merges where concept equals the only source
+            semanticMerges = {
+                merges: (rawMerges?.merges || []).filter((m: any) => {
+                    if (!m.sources || m.sources.length < 2) {
+                        console.log(`[BranchAnalysis] Skipping single-source merge: ${m.concept} <- ${m.sources}`);
+                        return false;
+                    }
+                    return true;
+                })
+            };
+            console.log(`[BranchAnalysis] Found ${semanticMerges.merges.length} valid merges.`);
+        }
+
+        return { success: true, data: structure, semanticMerges };
     } catch (error: any) {
         console.error('Crawl Error:', error);
         return { success: false, error: error.message };
     }
 }
 
-export async function generateCritiqueAction(structure: SiteStructure, userInstructions?: string) {
+export async function generateCritiqueAction(structure: SiteStructure, userInstructions?: string, overrides: ClusterOverrides = {}, semanticMerges?: SemanticMergeMap) {
     console.log(`[CritiqueAction] Triggered. USE_MOCK=${USE_MOCK}`);
     if (USE_MOCK) {
         await new Promise(resolve => setTimeout(resolve, 1500));
         return { success: true, data: MOCK_CRITIQUE, isMock: true };
     }
+
     try {
         const ai = new AIService();
         console.log(`[CritiqueAction] Calling Real AI service...`);
-        // Optimize structure to save tokens
-        const optimizedStructure = optimizeStructureForAI(structure);
-        console.log(`[CritiqueAction] Optimized structure: ${structure.nodes.length} -> ${optimizedStructure.nodes.length} nodes`);
-
-        const data = await ai.generateCritique(optimizedStructure, userInstructions);
+        // NORMALIZE STRUCTURE FOR AI
+        const normalizedStructure = normalizeStructureToConcepts(structure, semanticMerges);
+        const data = await ai.generateCritique(normalizedStructure, userInstructions, overrides);
         return { success: true, data };
     } catch (error: any) {
         console.error('AI Error (Critique):', error);
@@ -60,19 +126,72 @@ export async function generateCritiqueAction(structure: SiteStructure, userInstr
     }
 }
 
-export async function generateMigrationAction(structure: SiteStructure, userInstructions?: string) {
+export async function generateMigrationAction(structure: SiteStructure, userInstructions?: string, overrides: ClusterOverrides = {}, semanticMerges?: SemanticMergeMap) {
     console.log(`[MigrationAction] Triggered. USE_MOCK=${USE_MOCK}`);
     if (USE_MOCK) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         return { success: true, data: MOCK_MIGRATION_PLAN, isMock: true };
     }
+
     try {
         const ai = new AIService();
-        // Optimize structure
-        const optimizedStructure = optimizeStructureForAI(structure);
-        console.log(`[MigrationAction] Optimized structure: ${structure.nodes.length} -> ${optimizedStructure.nodes.length} nodes`);
 
-        const data = await ai.generateMigrationPlan(optimizedStructure, userInstructions);
+        // NORMALIZE STRUCTURE FOR AI
+        const normalizedStructure = normalizeStructureToConcepts(structure, semanticMerges);
+
+        // We still need 'grouped' for the UI clusters metadata (Using Normalized Structure!)
+        const grouped = groupSimilarPages(normalizedStructure, 3, 5, overrides);
+
+        const data = await ai.generateMigrationPlan(normalizedStructure, userInstructions, overrides, semanticMerges);
+
+        // ENHANCED: Content-based Cluster Analysis
+        console.log('📊 [ContentAnalysis] Analyzing cluster similarity...');
+        const { ContentSimilarityAnalyzer } = await import('@/modules/analysis/services/content-similarity-analyzer');
+
+        // --- Cluster Data Population for Cluster Component Architecture ---
+        const clusters: ClusterSpec[] = grouped.groups.map((group, idx) => {
+            const instances: PageInstance[] = group.allUrls.map(url => {
+                const node = normalizedStructure.nodes.find(n => n.url === url);
+                return {
+                    url,
+                    title: node?.meta?.title || 'Unknown Title',
+                    wordCount: node?.content?.wordCount || 0,
+                    assetsFound: node?.content?.images?.length || 0,
+                    status: 'pending'
+                };
+            });
+
+            return {
+                id: `cluster_${idx}`,
+                pattern: group.pattern,
+                instances
+            };
+        });
+
+        // Attach clusters to result
+        if (data) {
+            (data as any).clusters = clusters;
+
+            // Enrich migration plan with content-based tags
+            if (clusters.length > 0) {
+                const enrichedData = ContentSimilarityAnalyzer.enrichMigrationPlanWithTags(
+                    data,
+                    clusters,
+                    normalizedStructure
+                );
+
+                // Log merge recommendations
+                if (enrichedData.contentAnalysis?.mergeRecommendations) {
+                    console.log(`📊 [ContentAnalysis] Found ${enrichedData.contentAnalysis.mergeRecommendations.length} merge recommendations`);
+                    enrichedData.contentAnalysis.mergeRecommendations.forEach((rec: any) => {
+                        console.log(`   ${rec.shouldMerge ? '✅' : '❌'} ${rec.cluster1Id} + ${rec.cluster2Id}: ${rec.similarityScore}% - ${rec.reason}`);
+                    });
+                }
+
+                return { success: true, data: enrichedData };
+            }
+        }
+
         return { success: true, data };
     } catch (error: any) {
         console.error('AI Error (Migration):', error);
@@ -80,18 +199,23 @@ export async function generateMigrationAction(structure: SiteStructure, userInst
     }
 }
 
-export async function generateComponentLibraryAction(migrationPlan: any, crawledStructure?: any, userInstructions?: string, stackConfig?: any, critique?: any) {
+export async function generateComponentLibraryAction(migrationPlan: any, crawledStructure?: any, userInstructions?: string, stackConfig?: any, critique?: any, overrides: ClusterOverrides = {}, semanticMerges?: SemanticMergeMap) {
     if (USE_MOCK) {
         await new Promise(resolve => setTimeout(resolve, 1500));
         return { success: true, data: MOCK_COMPONENT_SPEC, isMock: true };
     }
     try {
         const ai = new AIService();
-        const data = await ai.generateComponentLibrary(migrationPlan, crawledStructure, userInstructions, stackConfig, critique);
+        const data = await ai.generateComponentLibrary(migrationPlan, crawledStructure, userInstructions, stackConfig, critique, overrides, semanticMerges);
         return { success: true, data };
     } catch (error: any) {
-        console.error('AI Error (Components):', error);
-        return { success: false, data: MOCK_COMPONENT_SPEC, error: error.message, isFallback: true };
+        console.error('❌ AI Error (Components):', error);
+        return {
+            success: false,
+            data: MOCK_COMPONENT_SPEC,
+            error: `AI-Analyse fehlgeschlagen: ${error.message}. Zeige Standard-Komponenten als Fallback.`,
+            isFallback: true
+        };
     }
 }
 
@@ -227,7 +351,8 @@ export async function generateImplementationPlanAction(
     userInstructions?: string,
     availableAssets?: Record<string, string>,
     designConfig?: DesignConfig,
-    pageSpecs?: any[]
+    pageSpecs?: any[],
+    migrationPlan?: any
 ) {
     if (USE_MOCK) {
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -235,7 +360,7 @@ export async function generateImplementationPlanAction(
     }
     try {
         const ai = new AIService();
-        const data = await ai.generateImplementationPlan(spec, stackConfig, userInstructions, availableAssets, designConfig, pageSpecs);
+        const data = await ai.generateImplementationPlan(spec, stackConfig, userInstructions, availableAssets, designConfig, pageSpecs, migrationPlan);
         return { success: true, data };
     } catch (error: any) {
         console.error('AI Error (Implementation Plan):', error);
@@ -422,7 +547,7 @@ export async function estimateClassificationTokensAction(
     }
 }
 
-export async function generatePageSpecsAction(targets: any[], structure?: any, sessionId?: string) {
+export async function generatePageSpecsAction(targets: any[], structure?: any, sessionId?: string, semanticMerges?: SemanticMergeMap) {
     console.log(`[PageSpecsAction] Triggered for ${targets.length} targets. Session: ${sessionId || 'none'}. USE_MOCK=${USE_MOCK}`);
     if (USE_MOCK) {
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -436,17 +561,63 @@ export async function generatePageSpecsAction(targets: any[], structure?: any, s
         };
     }
     try {
-        // 1. Enrich targets with source content for copywriting
-        const enrichedTargets = targets.map(t => {
-            const sources = (t.sourceUrls || []).map((url: string) => {
-                const node = structure?.nodes?.find((n: any) => n.url === url);
-                return node?.content?.rawText ? `--- Source: ${url} ---\n${node.content.rawText}` : '';
-            }).filter(Boolean).join('\n\n');
+        // 1. Enrich targets with source content for copywriting (AND FORK LANGUAGES)
+        // We expand "Concept Targets" back into "Language Variants" here.
+        const enrichedTargets = targets.flatMap((t: any) => {
+            const conceptUrl = (t.sourceUrls || [])[0];
 
-            return {
-                ...t,
-                sourceText: sources.substring(0, 15000) // Capacity check
-            };
+            // Find all RAW nodes that map to this concept
+            let matchingNodes: any[] = [];
+            if (structure?.nodes && conceptUrl) {
+                // Ensure we use Semantic Merges to match Concept URL (e.g. /services) to Source URL (e.g. /de/leistungen)
+                const targetConceptPath = normalizeUrlToConcept(conceptUrl, semanticMerges).conceptPath;
+                matchingNodes = structure.nodes.filter((n: any) =>
+                    normalizeUrlToConcept(n.url, semanticMerges).conceptPath === targetConceptPath
+                );
+            }
+
+            // Fallback: If no matching nodes found (or structure missing), create a dummy wrapper for the concept itself
+            if (matchingNodes.length === 0) {
+                // This preserves the original behavior if forking fails
+                const dummyNode = structure?.nodes?.find((n: any) => n.url === conceptUrl) || {
+                    url: conceptUrl,
+                    content: { rawText: '', images: [] },
+                    meta: { lang: 'default' }
+                };
+                matchingNodes.push(dummyNode);
+            }
+
+            // Generate ONE Spec per Language Variant
+            return matchingNodes.map((node: any) => {
+                const rawText = node?.content?.rawText ? `--- Source: ${node.url} ---\n${node.content.rawText}` : '';
+                const images = (node?.content?.images || []).slice(0, 15).map((img: any) => `- SRC: ${img.src} | ALT: ${img.alt || 'None'} | ROLE: ${img.role || 'unknown'}`).join('\n');
+
+                const lang = node.meta?.lang || normalizeUrlToConcept(node.url, semanticMerges).detectedLang || 'default';
+
+                // Compute Hreflang Map from Concept Variants
+                // This answers: "Where are the other language versions of this exact concept?"
+                const hreflangs = matchingNodes.map((n: any) => ({
+                    lang: n.meta?.lang || normalizeUrlToConcept(n.url, semanticMerges).detectedLang || 'default',
+                    url: n.url // Original Source URL (to be replaced by target path in export if needed, but for now links to source)
+                })).filter(h => h.lang !== 'default');
+
+                // Determine Canonical
+                // Logic: If there are multiple nodes for SAME language (e.g. params), pick the shortest one.
+                // For cross-language, we don't set canonical to a different language usually (unless it's a direct duplicate).
+                // Self-referencing canonical is standard.
+                const canonical = hreflangs.find(h => h.lang === lang)?.url || node.url;
+
+                return {
+                    ...t,
+                    // Unique ID per language variant (e.g., "spec-/blog/post-1-de")
+                    id: `${t.id}-${lang}`,
+                    language: lang,
+                    hreflangs, // Pass to frontend for export
+                    canonical, // Pass to frontend for export
+                    sourceText: `${rawText}\n\n### SOURCE ASSET INVENTORY (IMAGES):\n${images}`.substring(0, 15000),
+                    sourceDetails: [node] // Attach specific source node!
+                };
+            });
         });
 
         const ai = new AIService(sessionId);
@@ -567,6 +738,80 @@ export async function regeneratePageSpecsAction(
         return { success: true, data: result };
     } catch (error: any) {
         console.error(`❌ [RegenSpec] Failed for '${targetSpec.path}':`, error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ============================================================================
+// CLUSTER COMPONENT ARCHITECTURE ACTIONS
+// ============================================================================
+
+export async function generateClusterComponentsAction(samples: { url: string, html: string }[], clusterId: string) {
+    if (USE_MOCK) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        // Flatten mock library groups to get components
+        const mockComponents = MOCK_COMPONENT_LIBRARY.groups.flatMap(g => g.components);
+        return { success: true, data: { clusterId, components: mockComponents } };
+    }
+    try {
+        const ai = new AIService();
+        const components = await ai.generateClusterComponents(samples);
+        return { success: true, data: { clusterId, components } };
+    } catch (error: any) {
+        console.error('AI Error (Cluster Components):', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function mapClusterInstancesAction(pageHtml: string, pageUrl: string, componentSpec: any) {
+    if (USE_MOCK) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Return dummy mapped data
+        return { success: true, data: { components: [{ name: 'Hero', props: { title: 'Mock Mapped Page' } }] } };
+    }
+    try {
+        const ai = new AIService();
+        const data = await ai.mapPageToComponents(pageHtml, componentSpec);
+        return { success: true, data };
+    } catch (error: any) {
+        console.error('AI Error (Cluster Mapping):', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ============================================================================
+// LANGUAGE VARIANT DETECTION ACTIONS
+// ============================================================================
+
+/**
+ * Detects language variants using AI-powered 3-level detection system
+ *
+ * @param structure The site structure to analyze
+ * @param config Optional configuration for detection thresholds
+ * @returns Updated structure with variant links
+ */
+export async function detectLanguageVariantsAction(
+    structure: SiteStructure,
+    config?: Partial<import('@/types').VariantDetectionConfig>
+) {
+    console.log('🌍 [VariantDetect] Starting language variant detection...');
+
+    try {
+        const { detectAndLinkVariants } = await import('@/modules/core/utils/normalization');
+        const updatedStructure = await detectAndLinkVariants(structure, config);
+
+        // Count variants
+        const variantCount = updatedStructure.nodes.filter(n => n.variants && n.variants.length > 0).length;
+
+        console.log(`✅ [VariantDetect] Completed. ${variantCount} pages have variants.`);
+
+        return {
+            success: true,
+            data: updatedStructure,
+            stats: { variantCount }
+        };
+    } catch (error: any) {
+        console.error('❌ [VariantDetect] Error:', error);
         return { success: false, error: error.message };
     }
 }

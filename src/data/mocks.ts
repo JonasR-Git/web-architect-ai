@@ -21,7 +21,16 @@ const createMockNode = (url: string, title: string): SiteNode => ({
         headings: [{ level: 1, text: title }],
         wordCount: 500,
         images: [{ src: '/img/mock.jpg', alt: 'Mock' }],
-        links: [{ text: 'Home', href: '/' }],
+        links: [{
+            text: 'Home',
+            href: '/',
+            type: 'internal' as const,
+            role: 'navigation' as const,
+            roleConfidence: 90,
+            isButton: false,
+            opensInNewTab: false,
+            isDownload: false
+        }],
         forms: [],
         landmarks: [{ tag: 'MAIN' }],
         hasSkipLink: true,

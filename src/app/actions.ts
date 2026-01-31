@@ -697,6 +697,60 @@ export async function deleteSessionAction(id: string) {
 }
 
 // ============================================================================
+// GRANULAR SAVE ACTIONS - Phase 1 Optimization
+// ============================================================================
+
+export async function saveStateAction(id: string, state: { currentView?: string, blueprintTab?: string, mockupViewMode?: string }) {
+    try {
+        const success = await PersistenceService.saveState(id, state as any);
+        return { success };
+    } catch (error: any) {
+        console.error('[Action] Save State Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function saveStructureAction(id: string, structure: any) {
+    try {
+        const success = await PersistenceService.saveStructure(id, structure);
+        return { success };
+    } catch (error: any) {
+        console.error('[Action] Save Structure Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function saveMigrationAction(id: string, migrationPlan: any) {
+    try {
+        const success = await PersistenceService.saveMigration(id, migrationPlan);
+        return { success };
+    } catch (error: any) {
+        console.error('[Action] Save Migration Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function saveSpecsAction(id: string, specs: { pageSpecs?: any[], componentSpec?: any, finalOutput?: any }) {
+    try {
+        const success = await PersistenceService.saveSpecs(id, specs);
+        return { success };
+    } catch (error: any) {
+        console.error('[Action] Save Specs Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+export async function saveDesignAction(id: string, design: { designConfig?: any, stackConfig?: any }) {
+    try {
+        const success = await PersistenceService.saveDesign(id, design);
+        return { success };
+    } catch (error: any) {
+        console.error('[Action] Save Design Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+// ============================================================================
 // CLIENT-SIDE SMART LOOP ACTIONS
 // ============================================================================
 

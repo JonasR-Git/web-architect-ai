@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import {
     ArrowRight, Check, Merge, Trash2, CornerDownRight, AlertCircle,
@@ -304,6 +304,14 @@ export function InteractivePageMappingTable({
     const [mapping, setMapping] = useState<PageMapping[]>(initialMapping);
     const [hasChanges, setHasChanges] = useState(false);
 
+    // Sync with external updates (e.g., session loading, navigation)
+    useEffect(() => {
+        if (initialMapping) {
+            setMapping(initialMapping);
+            setHasChanges(false);
+        }
+    }, [initialMapping]);
+
     // Stats
     const stats = useMemo(() => {
         const counts = { keep: 0, merge: 0, redirect: 0, delete: 0 };
@@ -353,7 +361,15 @@ export function InteractivePageMappingTable({
         const redirects = mapping
             .filter(m => m.action === 'redirect' || m.action === 'keep')
             .map(m => {
-                const oldPath = new URL(m.old_url).pathname;
+                // Extract path - handle both full URLs and relative paths
+                let oldPath: string;
+                try {
+                    // Try to parse as URL (e.g., "https://example.com/blog")
+                    oldPath = new URL(m.old_url).pathname;
+                } catch {
+                    // If it fails, assume it's already a path (e.g., "/blog")
+                    oldPath = m.old_url.startsWith('/') ? m.old_url : `/${m.old_url}`;
+                }
                 return { source: oldPath, destination: m.new_path, permanent: true };
             });
 

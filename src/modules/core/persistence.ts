@@ -130,10 +130,88 @@ async function processAndSaveAssets(data: SessionData): Promise<SessionData> {
 }
 
 export const PersistenceService = {
+    /**
+     * GRANULAR SAVE METHODS - Phase 1 Optimization
+     * Allows saving individual parts of the session without rewriting everything
+     */
+
+    async saveState(id: string, state: Pick<SessionData, 'currentView' | 'blueprintTab' | 'mockupViewMode'>): Promise<boolean> {
+        const sessionFolder = path.join(SESSIONS_DIR, id);
+        const filePath = path.join(sessionFolder, 'state.json');
+
+        try {
+            await initDir(sessionFolder);
+            await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+            return true;
+        } catch (error) {
+            console.error('[Persistence] Failed to save state:', error);
+            return false;
+        }
+    },
+
+    async saveStructure(id: string, structure: SiteStructure): Promise<boolean> {
+        const sessionFolder = path.join(SESSIONS_DIR, id);
+        const filePath = path.join(sessionFolder, 'structure.json');
+
+        try {
+            await initDir(sessionFolder);
+            await fs.writeFile(filePath, JSON.stringify(structure, null, 2), 'utf-8');
+            return true;
+        } catch (error) {
+            console.error('[Persistence] Failed to save structure:', error);
+            return false;
+        }
+    },
+
+    async saveMigration(id: string, migrationPlan: any): Promise<boolean> {
+        const sessionFolder = path.join(SESSIONS_DIR, id);
+        const filePath = path.join(sessionFolder, 'migration.json');
+
+        try {
+            await initDir(sessionFolder);
+            await fs.writeFile(filePath, JSON.stringify(migrationPlan, null, 2), 'utf-8');
+            return true;
+        } catch (error) {
+            console.error('[Persistence] Failed to save migration:', error);
+            return false;
+        }
+    },
+
+    async saveSpecs(id: string, specs: { pageSpecs?: any[], componentSpec?: any, finalOutput?: any }): Promise<boolean> {
+        const sessionFolder = path.join(SESSIONS_DIR, id);
+        const filePath = path.join(sessionFolder, 'specs.json');
+
+        try {
+            await initDir(sessionFolder);
+            await fs.writeFile(filePath, JSON.stringify(specs, null, 2), 'utf-8');
+            return true;
+        } catch (error) {
+            console.error('[Persistence] Failed to save specs:', error);
+            return false;
+        }
+    },
+
+    async saveDesign(id: string, design: { designConfig?: any, stackConfig?: any }): Promise<boolean> {
+        const sessionFolder = path.join(SESSIONS_DIR, id);
+        const filePath = path.join(sessionFolder, 'design.json');
+
+        try {
+            await initDir(sessionFolder);
+            await fs.writeFile(filePath, JSON.stringify(design, null, 2), 'utf-8');
+            return true;
+        } catch (error) {
+            console.error('[Persistence] Failed to save design:', error);
+            return false;
+        }
+    },
+
+    /**
+     * LEGACY: Full session save - kept for backwards compatibility
+     * Prefer using granular saves for better performance
+     */
     async saveSession(data: SessionData): Promise<SessionData | null> {
         await initDir();
         const sessionFolder = path.join(SESSIONS_DIR, data.id);
-        const filePath = path.join(sessionFolder, 'session.json');
 
         try {
             await initDir(sessionFolder);
@@ -141,7 +219,55 @@ export const PersistenceService = {
             // Extract base64 assets to files before final JSON save
             const cleanedData = await processAndSaveAssets(data);
 
-            await fs.writeFile(filePath, JSON.stringify(cleanedData, null, 2), 'utf-8');
+            // Save to granular files for new structure
+            await this.saveState(data.id, {
+                currentView: data.currentView,
+                blueprintTab: data.blueprintTab,
+                mockupViewMode: data.mockupViewMode
+            });
+
+            if (data.structure) {
+                await this.saveStructure(data.id, data.structure);
+            }
+
+            if (data.migrationPlan) {
+                await this.saveMigration(data.id, data.migrationPlan);
+            }
+
+            await this.saveSpecs(data.id, {
+                pageSpecs: data.pageSpecs || undefined,
+                componentSpec: data.componentSpec || undefined,
+                finalOutput: data.finalOutput || undefined
+            });
+
+            await this.saveDesign(data.id, {
+                designConfig: data.designConfig,
+                stackConfig: data.stackConfig
+            });
+
+            // Save meta.json with essential info
+            const meta = {
+                id: data.id,
+                name: data.name,
+                url: data.url,
+                lastModified: data.lastModified,
+                userInstructions: data.userInstructions,
+                critique: data.critique,
+                logs: data.logs,
+                tokenStats: data.tokenStats,
+                customAssets: cleanedData.customAssets,
+                downloadedAssets: cleanedData.downloadedAssets,
+                excludedUrls: data.excludedUrls,
+                clusterOverrides: data.clusterOverrides,
+                optimizedContent: data.optimizedContent
+            };
+
+            await fs.writeFile(
+                path.join(sessionFolder, 'meta.json'),
+                JSON.stringify(meta, null, 2),
+                'utf-8'
+            );
+
             return cleanedData;
         } catch (error) {
             console.error('Failed to save session:', error);
@@ -151,29 +277,89 @@ export const PersistenceService = {
 
     async loadSession(id: string): Promise<SessionData | null> {
         await initDir();
+        const sessionFolder = path.join(SESSIONS_DIR, id);
 
-        // Try new folder structure first
-        let filePath = path.join(SESSIONS_DIR, id, 'session.json');
         try {
-            const content = await fs.readFile(filePath, 'utf-8');
-            return JSON.parse(content);
-        } catch (error) {
-            // Fallback: Check for legacy flat file
+            // Try loading from granular files first (new structure)
+            const metaPath = path.join(sessionFolder, 'meta.json');
+            const statePath = path.join(sessionFolder, 'state.json');
+            const structurePath = path.join(sessionFolder, 'structure.json');
+            const migrationPath = path.join(sessionFolder, 'migration.json');
+            const specsPath = path.join(sessionFolder, 'specs.json');
+            const designPath = path.join(sessionFolder, 'design.json');
+
+            try {
+                // Load all files in parallel for speed
+                const [metaContent, stateContent, structureContent, migrationContent, specsContent, designContent] = await Promise.all([
+                    fs.readFile(metaPath, 'utf-8').catch(() => null),
+                    fs.readFile(statePath, 'utf-8').catch(() => null),
+                    fs.readFile(structurePath, 'utf-8').catch(() => null),
+                    fs.readFile(migrationPath, 'utf-8').catch(() => null),
+                    fs.readFile(specsPath, 'utf-8').catch(() => null),
+                    fs.readFile(designPath, 'utf-8').catch(() => null)
+                ]);
+
+                // If we have at least meta, we're using the new structure
+                if (metaContent) {
+                    console.log(`[Persistence] Loading session ${id} from granular structure`);
+                    const meta = JSON.parse(metaContent);
+                    const state = stateContent ? JSON.parse(stateContent) : {};
+                    const structure = structureContent ? JSON.parse(structureContent) : null;
+                    const migration = migrationContent ? JSON.parse(migrationContent) : null;
+                    const specs = specsContent ? JSON.parse(specsContent) : {};
+                    const design = designContent ? JSON.parse(designContent) : {};
+
+                    return {
+                        ...meta,
+                        ...state,
+                        structure,
+                        migrationPlan: migration,
+                        pageSpecs: specs.pageSpecs || null,
+                        componentSpec: specs.componentSpec || null,
+                        finalOutput: specs.finalOutput || null,
+                        designConfig: design.designConfig,
+                        stackConfig: design.stackConfig
+                    } as SessionData;
+                }
+            } catch (granularError) {
+                console.log(`[Persistence] Granular load failed, trying legacy formats`);
+            }
+
+            // Fallback 1: Try monolithic session.json (newer legacy)
+            const sessionJsonPath = path.join(sessionFolder, 'session.json');
+            try {
+                const content = await fs.readFile(sessionJsonPath, 'utf-8');
+                const data = JSON.parse(content);
+
+                console.log(`[Persistence] Migrating session ${id} from monolithic to granular`);
+                // Migrate to new structure
+                await this.saveSession(data);
+
+                return data;
+            } catch (e) {
+                // Not found, try next fallback
+            }
+
+            // Fallback 2: Try legacy flat file structure
             const legacyPath = path.join(SESSIONS_DIR, `${id}.json`);
             try {
                 const content = await fs.readFile(legacyPath, 'utf-8');
                 const data = JSON.parse(content);
 
+                console.log(`[Persistence] Migrating session ${id} from legacy flat file to granular`);
                 // Migrate to new structure immediately
                 await this.saveSession(data);
-                // Optionally delete legacy file after successful migration
+                // Delete legacy file after successful migration
                 await fs.unlink(legacyPath).catch(e => console.warn(`Could not delete legacy file ${id}.json`, e));
 
                 return data;
             } catch (e) {
-                console.error(`Failed to load session ${id}:`, error);
+                console.error(`Failed to load session ${id} from any format:`, e);
                 return null;
             }
+        } catch (error) {
+            console.error(`Failed to load session ${id}:`, error);
+            return null;
         }
     },
 

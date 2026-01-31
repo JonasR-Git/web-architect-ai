@@ -149,12 +149,21 @@ function ReviewCard({
                                 <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Primary Merged Content:</span>
                                 <div className="flex flex-wrap gap-2">
                                     {(target as any).sourceDetails?.length > 0 ? (
-                                        (target as any).sourceDetails.map((src: any, idx: number) => (
-                                            <div key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-gray-300 max-w-full truncate" title={src.content?.substring(0, 100)}>
-                                                <ArrowRight className="w-3 h-3 text-gray-500" />
-                                                <span className="truncate max-w-[200px]">{src.path || src.url || src.id || 'Unknown Source'}</span>
-                                            </div>
-                                        ))
+                                        (target as any).sourceDetails.map((src: any, idx: number) => {
+                                            // Safely extract content preview - handle both string and object types
+                                            const contentPreview = typeof src.content === 'string'
+                                                ? src.content.substring(0, 100)
+                                                : typeof src.content?.rawText === 'string'
+                                                ? src.content.rawText.substring(0, 100)
+                                                : 'No content preview available';
+
+                                            return (
+                                                <div key={idx} className="flex items-center gap-1.5 px-2 py-1 bg-white/5 border border-white/10 rounded text-xs text-gray-300 max-w-full truncate" title={contentPreview}>
+                                                    <ArrowRight className="w-3 h-3 text-gray-500" />
+                                                    <span className="truncate max-w-[200px]">{src.path || src.url || src.id || 'Unknown Source'}</span>
+                                                </div>
+                                            );
+                                        })
                                     ) : (
                                         <span className="text-xs text-gray-600">
                                             {target.sourceIds?.length || 0} sources (IDs: {target.sourceIds?.join(', ') || 'None'})

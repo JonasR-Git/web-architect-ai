@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { ProcessLog } from '@/modules/engineering/components/process-log';
 import { SiteTree } from '@/modules/analysis/components/visualization/site-tree';
 import { ConfigForm } from '@/modules/design/components/config-form';
@@ -132,7 +132,13 @@ export default function Home() {
     loadSession,
     deleteSession,
     refreshSessions,
-    isLoading
+    isLoading,
+    // Granular saves
+    saveState,
+    saveStructure,
+    saveMigration,
+    saveSpecs,
+    saveDesign
   } = usePersistence();
 
   // --- Mapping Data Preparation (for Blueprint Tab) ---
@@ -301,20 +307,111 @@ export default function Home() {
     return Array.from(targetMap.values());
   }, [structure, semanticMerges, clusterOverrides, migrationPlan, excludedUrls]);
 
-  // --- Auto-Save Effect ---
-  // Trigger save when important state changes (and we have at least a structure)
+  // --- GRANULAR AUTO-SAVE SYSTEM (Phase 1 Optimization) ---
+  // Separate saves for different data types = massive performance boost
+  // UI changes (100 bytes) no longer trigger full session save (20 MB)
+
+  // 1. UI State Save (FAST - ~100 bytes, 8s debounce)
   useEffect(() => {
-    if (!structure || isProcessing) return;
+    if (!currentSessionId || isProcessing) return;
 
     const timeoutId = setTimeout(async () => {
+      console.log('[Auto-Save] Saving UI state...');
+      await saveState(currentSessionId, {
+        currentView: view,
+        blueprintTab,
+        mockupViewMode
+      });
+    }, 8000); // Long debounce for UI changes
+
+    return () => clearTimeout(timeoutId);
+  }, [view, blueprintTab, mockupViewMode, currentSessionId, isProcessing]);
+
+  // 2. Structure Save (MEDIUM - ~2-10 MB, 5s debounce)
+  useEffect(() => {
+    if (!structure || !currentSessionId || isProcessing) return;
+
+    const timeoutId = setTimeout(async () => {
+      console.log('[Auto-Save] Saving structure...');
+      await saveStructure(currentSessionId, structure);
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
+  }, [structure, currentSessionId, isProcessing]);
+
+  // 3. Migration Plan Save (MEDIUM - ~1-5 MB, 5s debounce)
+  useEffect(() => {
+    if (!migrationPlan || !currentSessionId || isProcessing) return;
+
+    const timeoutId = setTimeout(async () => {
+      console.log('[Auto-Save] Saving migration plan...');
+      await saveMigration(currentSessionId, migrationPlan);
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
+  }, [migrationPlan, currentSessionId, isProcessing]);
+
+  // 4. Specs Save (MEDIUM - ~1-10 MB, 5s debounce)
+  useEffect(() => {
+    if (!currentSessionId || isProcessing) return;
+    if (!pageSpecs && !componentSpec && !finalOutput) return;
+
+    const timeoutId = setTimeout(async () => {
+      console.log('[Auto-Save] Saving specs...');
+      await saveSpecs(currentSessionId, {
+        pageSpecs: pageSpecs || undefined,
+        componentSpec: componentSpec || undefined,
+        finalOutput: finalOutput || undefined
+      });
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
+  }, [pageSpecs, componentSpec, finalOutput, currentSessionId, isProcessing]);
+
+  // 5. Design Config Save (SMALL - ~100-500 KB, 5s debounce)
+  useEffect(() => {
+    if (!currentSessionId || isProcessing) return;
+
+    const timeoutId = setTimeout(async () => {
+      console.log('[Auto-Save] Saving design config...');
+      await saveDesign(currentSessionId, {
+        designConfig,
+        stackConfig
+      });
+    }, 5000);
+
+    return () => clearTimeout(timeoutId);
+  }, [designConfig, stackConfig, currentSessionId, isProcessing]);
+
+  // 6. Fallback: Full Session Save (LEGACY - for remaining data)
+  // Only runs when meta data changes (logs, assets, etc.)
+  const lastFullSaveRef = useRef<string>('');
+  useEffect(() => {
+    if (!structure || !currentSessionId || isProcessing) return;
+
+    const timeoutId = setTimeout(async () => {
+      // Hash of meta data
+      const metaHash = JSON.stringify({
+        logs: logs.length,
+        customAssets: customAssets?.length,
+        downloadedAssets: Object.keys(downloadedAssets?.images || {}).length,
+        excludedUrls: Array.from(excludedUrls).length,
+        optimizedContent: optimizedContent.size,
+        url, userInstructions
+      });
+
+      if (metaHash === lastFullSaveRef.current) return;
+      lastFullSaveRef.current = metaHash;
+
+      console.log('[Auto-Save] Saving meta data (full save)...');
       const cleanedData = await saveSession({
-        id: currentSessionId || crypto.randomUUID(), // Create ID if new
+        id: currentSessionId,
         name: new URL(url).hostname || 'Untitled Project',
         url,
         currentView: view,
         structure,
         critique,
-        crawlStats: null, // Don't persist ephemeral stats
+        crawlStats: null,
         logs,
         migrationPlan,
         userInstructions,
@@ -324,35 +421,26 @@ export default function Home() {
         pageSpecs,
         componentSpec,
         finalOutput,
-        excludedUrls: Array.from(excludedUrls), // Set -> Array
-        optimizedContent: Array.from(optimizedContent.entries()), // Map -> Array
+        excludedUrls: Array.from(excludedUrls),
+        optimizedContent: Array.from(optimizedContent.entries()),
         tokenStats,
         customAssets,
         blueprintTab,
-
         mockupViewMode,
         clusterOverrides
       });
 
-      // If server returned cleaned data (URLs instead of base64), update local state
-      // to prevent re-sending massive blobs in the next auto-save cycle.
+      // Update local state with cleaned URLs (assets)
       if (cleanedData) {
-        if (cleanedData.customAssets) {
-          setCustomAssets(cleanedData.customAssets);
-        }
-        if (cleanedData.downloadedAssets) {
-          setDownloadedAssets(cleanedData.downloadedAssets);
-        }
+        if (cleanedData.customAssets) setCustomAssets(cleanedData.customAssets);
+        if (cleanedData.downloadedAssets) setDownloadedAssets(cleanedData.downloadedAssets);
       }
-    }, 2000); // Debounce 2s
+    }, 10000); // Longest debounce for full saves
 
     return () => clearTimeout(timeoutId);
   }, [
-    // Dependencies to trigger auto-save - significantly expanded
-    structure, critique, migrationPlan, componentSpec, finalOutput,
-    designConfig, stackConfig, optimizedContent, view, url,
-    userInstructions, logs, tokenStats, downloadedAssets, pageSpecs,
-    customAssets, blueprintTab, mockupViewMode, excludedUrls
+    logs, customAssets, downloadedAssets, excludedUrls, optimizedContent,
+    url, userInstructions, currentSessionId, isProcessing
   ]);
 
   // Handle Load Session

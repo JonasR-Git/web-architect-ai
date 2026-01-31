@@ -5,7 +5,12 @@ import {
     saveSessionAction,
     loadSessionAction,
     listSessionsAction,
-    deleteSessionAction
+    deleteSessionAction,
+    saveStateAction,
+    saveStructureAction,
+    saveMigrationAction,
+    saveSpecsAction,
+    saveDesignAction
 } from '@/app/actions';
 import { SessionData, SessionSummary } from '@/modules/core/persistence';
 
@@ -78,6 +83,47 @@ export function usePersistence() {
         }
     }, [currentSessionId]);
 
+    // Granular save methods for performance
+    const saveState = useCallback(async (id: string, state: { currentView?: string, blueprintTab?: string, mockupViewMode?: string }) => {
+        const result = await saveStateAction(id, state);
+        if (result.success) {
+            setLastSaved(new Date());
+        }
+        return result.success;
+    }, []);
+
+    const saveStructure = useCallback(async (id: string, structure: any) => {
+        const result = await saveStructureAction(id, structure);
+        if (result.success) {
+            setLastSaved(new Date());
+        }
+        return result.success;
+    }, []);
+
+    const saveMigration = useCallback(async (id: string, migrationPlan: any) => {
+        const result = await saveMigrationAction(id, migrationPlan);
+        if (result.success) {
+            setLastSaved(new Date());
+        }
+        return result.success;
+    }, []);
+
+    const saveSpecs = useCallback(async (id: string, specs: { pageSpecs?: any[], componentSpec?: any, finalOutput?: any }) => {
+        const result = await saveSpecsAction(id, specs);
+        if (result.success) {
+            setLastSaved(new Date());
+        }
+        return result.success;
+    }, []);
+
+    const saveDesign = useCallback(async (id: string, design: { designConfig?: any, stackConfig?: any }) => {
+        const result = await saveDesignAction(id, design);
+        if (result.success) {
+            setLastSaved(new Date());
+        }
+        return result.success;
+    }, []);
+
     return {
         sessions,
         currentSessionId,
@@ -87,6 +133,12 @@ export function usePersistence() {
         saveSession,
         loadSession,
         deleteSession,
-        refreshSessions
+        refreshSessions,
+        // Granular saves
+        saveState,
+        saveStructure,
+        saveMigration,
+        saveSpecs,
+        saveDesign
     };
 }

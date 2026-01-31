@@ -109,6 +109,45 @@ export function detectPatterns(
         }
     }
 
+    // ADDITIONAL: Detect PREFIX patterns (e.g., /services-*, /blog-*)
+    // This catches top-level pages with shared prefixes that were excluded by MIN_DEPTH_FOR_CLUSTERING
+    const prefixGroups = new Map<string, SiteNode[]>();
+
+    for (const node of nodes) {
+        const info = nodeInfo.get(node.url);
+        if (!info) continue;
+
+        // Only process single-segment pages (depth=1) that weren't already clustered
+        if (info.segments.length !== 1) continue;
+
+        const segment = info.segments[0];
+
+        // Check if segment contains a hyphen (potential prefix pattern)
+        const hyphenIndex = segment.indexOf('-');
+        if (hyphenIndex > 0 && hyphenIndex < segment.length - 1) {
+            const prefix = segment.substring(0, hyphenIndex);
+
+            // Only consider prefixes that are at least 3 characters (avoid false positives)
+            if (prefix.length >= 3) {
+                const key = `/${prefix}-*`;
+                if (!prefixGroups.has(key)) {
+                    prefixGroups.set(key, []);
+                }
+                prefixGroups.get(key)!.push(node);
+            }
+        }
+    }
+
+    // Add prefix patterns if they have enough members
+    for (const [prefixPattern, children] of prefixGroups) {
+        if (children.length >= minClusterSize) {
+            patterns.push({
+                pattern: prefixPattern.replace('-*', '-[slug]'),
+                pages: children,
+            });
+        }
+    }
+
     // Sort by size (largest first)
     patterns.sort((a, b) => b.pages.length - a.pages.length);
 

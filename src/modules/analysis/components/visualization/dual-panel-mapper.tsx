@@ -518,6 +518,14 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
     const [validationResult, setValidationResult] = useState<MappingValidationResult | null>(null);
     const [showValidationModal, setShowValidationModal] = useState(false);
 
+    // Sync with external updates (e.g., session loading, navigation)
+    useEffect(() => {
+        if (initialTargets) {
+            setTargets(initialTargets);
+            setHasChanges(false); // Reset changes flag when loading new data
+        }
+    }, [initialTargets]);
+
     // Real-time validation
     useEffect(() => {
         const result = MappingValidator.validate(sources, targets);

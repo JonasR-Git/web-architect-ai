@@ -15,6 +15,7 @@ export class LinkAnalyzer {
     static analyzeLinks($: cheerio.CheerioAPI, pageUrl: string): LinkAnalysis[] {
         const links: LinkAnalysis[] = [];
 
+        // Extract regular <a href> links
         $('a[href]').each((_, linkEl) => {
             const $link = $(linkEl);
             const href = $link.attr('href');
@@ -55,6 +56,41 @@ export class LinkAnalyzer {
                 ariaLabel,
                 opensInNewTab,
                 isDownload
+            });
+        });
+
+        // FRAMESET SUPPORT: Extract <frame> and <iframe> sources as internal links
+        // This enables crawling of old frameset-based websites
+        $('frame[src], iframe[src]').each((_, frameEl) => {
+            const $frame = $(frameEl);
+            const src = $frame.attr('src');
+            if (!src) return;
+
+            const frameName = $frame.attr('name') || 'frame';
+            const frameTitle = $frame.attr('title') || '';
+
+            // Resolve relative URLs
+            let resolvedSrc: string;
+            try {
+                resolvedSrc = new URL(src, pageUrl).toString();
+            } catch {
+                // Invalid URL, skip
+                return;
+            }
+
+            links.push({
+                href: resolvedSrc,
+                text: frameTitle || `[Frame: ${frameName}]`,
+                type: 'internal', // Frames are always internal to the same site
+                role: 'navigation', // Frames typically contain navigation or content
+                roleConfidence: 70,
+                context: 'frameset',
+                isButton: false,
+                buttonStyle: undefined,
+                social: undefined,
+                ariaLabel: frameTitle || undefined,
+                opensInNewTab: false,
+                isDownload: false
             });
         });
 

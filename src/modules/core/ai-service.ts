@@ -180,7 +180,17 @@ export class AIService {
     }
 
     // For Markdown output (implementation plan, design system)
-    private async callAIRaw(messages: any[], model: string = AI_MODELS.default, stepName: string = 'Unknown'): Promise<string> {
+    private async callAIRaw(
+        messages: any[],
+        modelOrOptions: string | { model: string; temperature?: number } = AI_MODELS.default,
+        stepName: string = 'Unknown'
+    ): Promise<string> {
+        // Handle both string and object input
+        const model = typeof modelOrOptions === 'string' ? modelOrOptions : modelOrOptions.model;
+        const temperature = typeof modelOrOptions === 'object' && modelOrOptions.temperature !== undefined
+            ? modelOrOptions.temperature
+            : undefined;
+
         const inputText = JSON.stringify(messages);
         const tokensIn = estimateTokens(inputText);
         const startTime = Date.now();
@@ -195,12 +205,20 @@ export class AIService {
             let completion;
             try {
                 // Attempt 1: Requested model
-                completion = await openRouter.chat.send({
+                const requestOptions: any = {
                     model: model,
                     messages: messages,
                     stream: false,
                     max_tokens: 32000,
-                } as any);
+                };
+
+                // Add temperature if specified
+                if (temperature !== undefined) {
+                    requestOptions.temperature = temperature;
+                    console.log(`🎨[${stepName}] Using temperature: ${temperature}`);
+                }
+
+                completion = await openRouter.chat.send(requestOptions);
             } catch (firstError: any) {
                 const errorMessage = firstError?.message || firstError?.error?.message || (typeof firstError?.body === 'string' ? firstError.body : '');
                 const isRateLimit = firstError?.status === 429 || firstError?.statusCode === 429 || errorMessage.includes('429');
@@ -210,20 +228,28 @@ export class AIService {
                 if ((isRateLimit || isFreeEnded || hasFreeSuffix) && hasFreeSuffix) {
                     const paidModel = model.replace(':free', '');
                     console.warn(`⚠️[${stepName}] Model Error.Switching from ${model} to PAID model: ${paidModel} ...`);
-                    completion = await openRouter.chat.send({
+                    const fallbackOptions: any = {
                         model: paidModel,
                         messages: messages,
                         stream: false,
                         max_tokens: 32000,
-                    } as any);
+                    };
+                    if (temperature !== undefined) {
+                        fallbackOptions.temperature = temperature;
+                    }
+                    completion = await openRouter.chat.send(fallbackOptions);
                 } else if (isFreeEnded && !hasFreeSuffix && model.includes('mimo')) {
                     console.warn(`⚠️[${stepName}] MiMo Error.Falling back to default model...`);
-                    completion = await openRouter.chat.send({
+                    const defaultFallbackOptions: any = {
                         model: AI_MODELS.default,
                         messages: messages,
                         stream: false,
                         max_tokens: 32000,
-                    } as any);
+                    };
+                    if (temperature !== undefined) {
+                        defaultFallbackOptions.temperature = temperature;
+                    }
+                    completion = await openRouter.chat.send(defaultFallbackOptions);
                 } else {
                     throw firstError;
                 }

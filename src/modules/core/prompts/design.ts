@@ -5,9 +5,17 @@ export const DESIGN_GENERATOR_SYSTEM_PROMPT = `You are a World-Class Art Directo
 Your task is to generate a complete, professional, HARMONIOUS Design System.
 
 INPUT:
-- baseColors: Array of hex codes (extracted from original site OR user-provided).
-- vibe: Desired aesthetic (e.g., "glassmorphism", "brutalist", "luxury").
-- designStyle: The selected design preset (important for style coherence).
+- EXTRACTED COLOR PALETTE: Prioritized colors from the original site (Brand > Hero > Overall)
+  * BRAND COLORS: From logo - these define the core identity (HIGHEST PRIORITY)
+  * HERO COLORS: From hero images - use for backgrounds and atmosphere
+  * OVERALL COLORS: Site-wide palette - ensure your output feels "native"
+- vibe: Desired aesthetic (e.g., "glassmorphism", "brutalist", "luxury")
+- designStyle: The selected design preset (important for style coherence)
+
+## 🎯 COLOR EXTRACTION PRIORITY
+1. **LOGO/BRAND COLORS** → Primary, Secondary, Accent (preserve HUE)
+2. **HERO IMAGE COLORS** → Background, Surface, Atmospheric tints
+3. **OVERALL PALETTE** → Consistency check (does your output feel native?)
 
 ## CRITICAL COLOR HARMONY RULES
 
@@ -123,12 +131,68 @@ Apply \`font-bold\` to headlines and \`font-normal\` with \`leading-relaxed\` to
    - Use the provided \`headline\` and \`content\` for each section.
    - **CRITICAL**: Do NOT generate "Lorem Ipsum" or rewrite the provided text.
    - Maintain the provided language (German).
-2. **images** (Visual Assets):
-   - **PRIORITY (MANDATORY)**: If an image in a section has \`status: 'mandatory'\`, YOU MUST USE IT in that specific section. This is a hard constraint.
-   - **OPTIONAL**: If an image has \`status: 'optional'\`, you should prioritize it for that section, but you may skip it if it doesn't fit the specific layout or if there are better matches in the global pool.
-   - **FALLBACK**: If no images are assigned to a section, select from the global \`images\` pool based on \`role\`.
-   - Never use the same image twice in the same section.
+2. **images** (Visual Assets) - MAXIMIZE USAGE:
+   - **CRITICAL**: Your goal is to use AS MANY images as possible from the provided pool. The original site likely used rich visual content - REPLICATE THAT.
+   - **MANDATORY IMAGES**: If an image has \`status: 'mandatory'\`, YOU MUST USE IT in that specific section. Non-negotiable.
+   - **OPTIONAL IMAGES**: Treat these as "strongly recommended". Use them unless there's a clear mismatch.
+   - **GLOBAL POOL**: After placing mandatory/optional images, USE REMAINING IMAGES from the global pool. Match by \`role\` (hero-background, feature-image, gallery-item, team-member, etc.).
+   - **MULTI-IMAGE SECTIONS**:
+     * Features → Use 3-6 images (one per feature card with icon/illustration)
+     * Gallery/Showcase → Use 6-12 images in bento grid or masonry layout
+     * Team → Use ALL team-member role images
+     * Testimonials → Use customer photos if available
+     * Hero → Combine hero-background + hero-foreground for depth
+   - **VISUAL DENSITY**: If you have 20+ images, the page should feel visually rich. Use background images, card headers, section decorations, and content imagery.
+   - **NEVER**: Leave images unused if they can enhance a section. Empty image slots = wasted opportunity.
 3. **rawText**: Only for contact details, dates, or footer links.
+
+## 📸 IMAGE PLACEMENT STRATEGIES
+- **Hero Section**: Background image (hero-background) + foreground product/person (hero-foreground) for layered depth
+- **Features Section**: Icon/illustration per card (feature-image role) or split 50/50 text-image layout
+- **About/Team Section**: Team photos in grid, founder portrait, office images
+- **Services/Products Section**: Visual per service card + optional background pattern
+- **Gallery/Portfolio Section**: 6-12 images in asymmetric bento grid (mix aspect-square and aspect-video)
+- **Testimonials**: Customer avatars (testimonial-avatar role)
+- **Footer**: Background pattern or subtle brand imagery
+- **ORIGINAL SITE FIDELITY**: If the original site had heavy image usage, MATCH THAT. Don't create a text-heavy mockup if the source was visual-first.
+
+## 🎨 POSITIONAL IMAGE COLORS (OPTIONAL - Advanced Harmony)
+
+Some images include **positional color data** (colorAnalysis.positional) extracted from specific regions:
+- \`top\`: Colors from top 20% (sky, headers, atmospheric elements)
+- \`bottom\`: Colors from bottom 20% (ground, footers, shadows)
+- \`left/right\`: Side region colors (directional flow, sidebar accents)
+- \`center\`: Main subject colors (focal point, primary content)
+- \`corners\`: Corner accent colors (topLeft, topRight, bottomLeft, bottomRight)
+
+**Use Cases (Only when HARMONIOUS)**:
+1. **Gradient Transitions**: Hero image with blue sky on top → fade from sky color to white below
+   \`\`\`html
+   <div class="bg-gradient-to-b from-[#87CEEB] to-white"><!-- Sky blue from image.colorAnalysis.positional.top[0] --></div>
+   \`\`\`
+
+2. **Section Background Matching**: Feature card with product image → use bottom color as card background
+   \`\`\`html
+   <div class="bg-[#2C3E50]"><!-- Matches image.colorAnalysis.positional.bottom[0] --></div>
+   \`\`\`
+
+3. **Border/Accent Colors**: Gallery item → border color from corner accent
+   \`\`\`html
+   <img class="border-4 border-[#E74C3C]" /><!-- From positional.corners.topRight -->
+   \`\`\`
+
+4. **Overlay Tints**: Hero section → subtle overlay matching center colors
+   \`\`\`html
+   <div class="absolute inset-0 bg-[#34495E]/10"><!-- Tinted with center color --></div>
+   \`\`\`
+
+**Important Guidelines**:
+- ✅ Use ONLY when it creates visual harmony (e.g., seamless image-to-background transitions)
+- ✅ Verify contrast ratios (WCAG AAA) when using for text backgrounds
+- ❌ Don't force it - if the design looks better without positional colors, skip them
+- ❌ Don't use all regions at once - select 1-2 strategic applications per page
+
+**Fallback**: If colorAnalysis.positional is missing, use main palette (colorAnalysis.palette) or designSystemColors instead.
 
 ## 🛠️ TAILWIND PRO-TIPS
 - Use \`hover:scale-[1.02] active:scale-[0.98]\` for interactive cards.
@@ -422,19 +486,71 @@ export function buildDesignPromptGeneratorPrompt(
     userInstructions?: string,
     crawledColors?: any
 ) {
-    let userContent = `Stack: ${stack.framework} with ${stack.uiLibrary} \n`;
+    let userContent = `Stack: ${stack.framework} with ${stack.uiLibrary} \n\n`;
 
+    // Enhanced color context with prioritization
     if (crawledColors) {
-        userContent += `Crawled Color Palette: ${JSON.stringify(crawledColors)} \n`;
+        userContent += `## EXTRACTED COLOR PALETTE (Prioritized)\n\n`;
+
+        // 1. Logo/Brand Colors (HIGHEST PRIORITY)
+        if (crawledColors.brand || crawledColors.logoColors) {
+            userContent += `### 🎯 BRAND COLORS (Use these as PRIMARY/ACCENT base):\n`;
+            const brandColors = crawledColors.brand || crawledColors.logoColors?.[0];
+            if (brandColors) {
+                userContent += `- Primary Candidate: ${brandColors.primary || 'N/A'}\n`;
+                userContent += `- Secondary Candidate: ${brandColors.secondary || 'N/A'}\n`;
+                userContent += `- Accent Candidate: ${brandColors.accent || brandColors.vibrant || 'N/A'}\n`;
+            }
+            userContent += `**CRITICAL**: These logo colors define the brand identity. Preserve the HUE, adjust saturation/lightness for style coherence.\n\n`;
+        }
+
+        // 2. Hero Image Colors (HIGH PRIORITY for atmosphere)
+        if (crawledColors.hero && crawledColors.hero.length > 0) {
+            userContent += `### 🖼️ HERO IMAGE COLORS (Use for backgrounds/atmosphere):\n`;
+            userContent += `- Colors: ${crawledColors.hero.slice(0, 5).join(', ')}\n`;
+            userContent += `**USE FOR**: Background gradients, section tints, atmospheric overlays\n\n`;
+        }
+
+        // 3. Overall Palette (REFERENCE ONLY)
+        if (crawledColors.overall && crawledColors.overall.length > 0) {
+            userContent += `### 📊 OVERALL SITE COLORS (Reference for consistency):\n`;
+            userContent += `- Full Palette: ${crawledColors.overall.slice(0, 10).join(', ')}\n`;
+            userContent += `**USE FOR**: Ensuring your generated palette feels "native" to the original site\n\n`;
+        }
+
+        // 4. CSS-extracted colors (CONTEXT)
+        if (crawledColors.dominant || crawledColors.background || crawledColors.text) {
+            userContent += `### 🎨 CSS-EXTRACTED COLORS:\n`;
+            if (crawledColors.dominant) {
+                userContent += `- Dominant: ${Array.isArray(crawledColors.dominant) ? crawledColors.dominant.slice(0, 3).join(', ') : crawledColors.dominant}\n`;
+            }
+            if (crawledColors.background) {
+                userContent += `- Background: ${Array.isArray(crawledColors.background) ? crawledColors.background.slice(0, 3).join(', ') : crawledColors.background}\n`;
+            }
+            if (crawledColors.text) {
+                userContent += `- Text: ${Array.isArray(crawledColors.text) ? crawledColors.text.slice(0, 3).join(', ') : crawledColors.text}\n`;
+            }
+            userContent += `\n`;
+        }
+
+        userContent += `---\n\n`;
     }
 
     if (spec?.design_system) {
-        userContent += `Design System Analysis: ${JSON.stringify(spec.design_system)} \n`;
+        userContent += `## DESIGN SYSTEM ANALYSIS:\n${JSON.stringify(spec.design_system)}\n\n`;
     }
 
     if (userInstructions) {
-        userContent += `User Instructions: ${userInstructions} `;
+        userContent += `## USER INSTRUCTIONS (HIGHEST PRIORITY):\n${userInstructions}\n\n`;
     }
+
+    // Add harmonization guidance
+    userContent += `## HARMONIZATION STRATEGY:\n`;
+    userContent += `1. START with logo/brand colors as your PRIMARY base\n`;
+    userContent += `2. ADJUST saturation/lightness to match the selected design style preset\n`;
+    userContent += `3. USE hero colors for backgrounds and atmospheric elements\n`;
+    userContent += `4. ENSURE the final palette feels cohesive (like Apple/Stripe/Linear)\n`;
+    userContent += `5. TEST contrast: Text must have 7:1 ratio on backgrounds\n`;
 
     return [
         { role: 'system', content: DESIGN_GENERATOR_SYSTEM_PROMPT },
@@ -481,18 +597,29 @@ ${focusPermissions ? `## FOCUS AREAS\n${focusPermissions}` : ''}
 - Roundness: ${roundnessClass}
 `;
 
+    // Check if any images have positional color data
+    const hasPositionalColors = siteData?.images?.some((img: any) => img.colorAnalysis?.positional);
+    const positionalHint = hasPositionalColors
+        ? `\n- 🎨 POSITIONAL COLORS: Some images include regional color data (top/bottom/left/right/center/corners). Use these for harmonious transitions ONLY when it enhances visual flow (e.g., gradient from sky color to white).`
+        : '';
+
     let userContent = `
 GENERATE LANDING PAGE MOCKUP (Standard Mode).
 
 HIGH PRIORITY:
 ${siteData?.plannedContent ? `- PLATFORM DRAFT (plannedContent) IS PROVIDED. Use this strictly for page structure and text.` : '- No drafted content provided. Analyze rawText and generate suitable marketing copy.'}
-- IMAGES: We have ${siteData?.images?.length || 0} images available. Match them to section roles.
+- 🎨 IMAGES: We have ${siteData?.images?.length || 0} images available.
+  → YOUR GOAL: Use AT LEAST ${Math.floor((siteData?.images?.length || 0) * 0.75)} of them (75%+ usage rate).
+  → Match them to sections by role, create multi-image layouts (grids/galleries), and ensure visual richness.
+  → The original site likely used these images extensively - REPLICATE that visual density.${positionalHint}
 - ASSIGNED LOGOS: ${siteData?.assignedLogos ? JSON.stringify(siteData.assignedLogos) : 'None provided yet. Select from global images pool.'}
 
 CONTEXT:
 Site Data: ${JSON.stringify(siteData || {})}
 User Prompt: ${userPrompt || 'Create a premium, professional experience based on the provided drafts.'}
 Iteration: ${iteration}
+
+FINAL REMINDER: Maximize image usage. A visually rich mockup with abundant imagery is better than sparse text-heavy sections.
 `;
 
     return [
@@ -507,23 +634,28 @@ function buildUnleashedMockupPrompt(
     userPrompt?: string,
     iteration: number = 1
 ) {
-    const archetype = config.unleashedArchetype || 'chaos';
-    const archetypeRules = UNLEASHED_ARCHETYPES[archetype] || UNLEASHED_ARCHETYPES.chaos;
+    // LEGACY FUNCTION - No longer used with new 5-stage ultra-extreme generation
+    // Kept for backwards compatibility, using new field names
+    const archetype = config.selectedArchetype || 'chaos';
+    const archetypeRules = UNLEASHED_ARCHETYPES[archetype as keyof typeof UNLEASHED_ARCHETYPES] || UNLEASHED_ARCHETYPES.chaos;
 
     const systemPrompt = `${UNLEASHED_MOCKUP_SYSTEM_PROMPT}
 
 ${archetypeRules}
 
-## MODE: ${config.unleashedMode === 'on-with-colors' ? 'UNLEASHED (Keep Colors)' : 'TOTAL CHAOS'}
-${config.unleashedMode === 'on-with-colors' ? `
+## MODE: ULTRA-EXTREME
 KEEP COLORS:
 - Primary: ${config.colors.primary}
 - Background: ${config.colors.background}
-` : 'IGNORE COLORS. Pick your own pallete based on the archetype.'}
 `;
 
     let userContent = `
 GENERATE UNLEASHED EXPERIENCE.
+
+IMAGES DIRECTIVE:
+- We have ${siteData?.images?.length || 0} images. Use them CREATIVELY and ABUNDANTLY.
+- Apply experimental effects: mix-blend-modes, filters (invert, hue-rotate), skew, overlays
+- Create visual chaos or cinematic depth - but USE THE IMAGES
 
 CONTEXT:
 Site Data: ${JSON.stringify(siteData || {})}
@@ -544,7 +676,9 @@ export function buildMockupPrompt(
     userPrompt?: string,
     iteration: number = 1
 ) {
-    if (config.unleashedMode === 'on' || config.unleashedMode === 'on-with-colors') {
+    // LEGACY FUNCTION - No longer used with new 5-stage ultra-extreme generation
+    // Always use ultra-extreme if archetype is selected
+    if (config.selectedArchetype) {
         return buildUnleashedMockupPrompt(siteData, config, userPrompt, iteration);
     }
     return buildStandardMockupPrompt(siteData, config, userPrompt, iteration);

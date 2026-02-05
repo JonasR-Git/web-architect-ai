@@ -676,6 +676,129 @@ export function ContentReviewEditor({
         handleFieldChange(targetId, 'user_prompt', prompt);
     };
 
+    /**
+     * Sample context items intelligently with category-based diversity
+     * User requirement: "lieber weniger Kontext, dafür diesen aber komplett"
+     * - Max 10-12 items (not 30+)
+     * - COMPLETE content per item (8000 chars, not truncated)
+     * - Category diversity for broad case coverage
+     */
+    const sampleContextDiversely = (
+        dependencies: string[],
+        structure: SiteStructure,
+        localTargets: TargetSlot[]
+    ): { path: string; content: string }[] => {
+        const MAX_ITEMS = 12;
+        const MAX_ITEMS_PER_CATEGORY = 2;
+        const MAX_CONTENT_LENGTH = 8000; // Complete content, not truncated
+
+        // Category classification
+        type Category = 'critical' | 'service' | 'blog' | 'case-study' | 'legal' | 'other';
+        const categorize = (path: string): Category => {
+            const lower = path.toLowerCase();
+            if (lower === '/' || lower === '/home' || lower === '/about' || lower === '/contact') return 'critical';
+            if (lower.includes('/service') || lower.includes('/leistung') || lower.includes('/product') || lower.includes('/solution')) return 'service';
+            if (lower.includes('/blog') || lower.includes('/wissen') || lower.includes('/news') || lower.includes('/artikel')) return 'blog';
+            if (lower.includes('/case') || lower.includes('/projekt') || lower.includes('/kunden') || lower.includes('/portfolio') || lower.includes('/referenz')) return 'case-study';
+            if (lower.includes('/impressum') || lower.includes('/datenschutz') || lower.includes('/privacy') || lower.includes('/terms') || lower.includes('/agb')) return 'legal';
+            return 'other';
+        };
+
+        // Build full context items with metadata
+        const contextItems = dependencies.map(depPath => {
+            // Try to find in structure first
+            const node = structure?.nodes?.find(n => {
+                try {
+                    return new URL(n.url).pathname === depPath;
+                } catch (e) {
+                    return false;
+                }
+            });
+
+            let content = '';
+            let meta = null;
+
+            if (node && node.content) {
+                content = node.content.rawText || '';
+                meta = node.meta;
+            } else {
+                // Fallback: try to find in localTargets
+                const depTarget = localTargets.find(lt => lt.path === depPath);
+                if (depTarget) {
+                    content = (depTarget as any).sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
+                }
+            }
+
+            if (!content) return null;
+
+            const category = categorize(depPath);
+            const wordCount = content.split(/\s+/).length;
+
+            // Priority scoring for sorting within category
+            let priority = 0;
+            if (category === 'critical') priority += 100; // Critical pages always top priority
+            priority += Math.min(wordCount / 100, 50); // Richer content = higher (max +50)
+
+            return {
+                path: depPath,
+                content: content.substring(0, MAX_CONTENT_LENGTH), // Keep complete but cap at 8000 chars
+                category,
+                priority,
+                wordCount
+            };
+        }).filter(Boolean) as Array<{
+            path: string;
+            content: string;
+            category: Category;
+            priority: number;
+            wordCount: number;
+        }>;
+
+        // Group by category
+        const byCategory = contextItems.reduce((acc, item) => {
+            if (!acc[item.category]) acc[item.category] = [];
+            acc[item.category].push(item);
+            return acc;
+        }, {} as Record<Category, typeof contextItems>);
+
+        // Sort within each category by priority (descending)
+        Object.keys(byCategory).forEach(cat => {
+            byCategory[cat as Category].sort((a, b) => b.priority - a.priority);
+        });
+
+        // Sample max N per category, ensuring diversity
+        const sampled: typeof contextItems = [];
+        const categories: Category[] = ['critical', 'service', 'blog', 'case-study', 'legal', 'other'];
+
+        categories.forEach(cat => {
+            const items = byCategory[cat] || [];
+            sampled.push(...items.slice(0, MAX_ITEMS_PER_CATEGORY));
+        });
+
+        // If we still have room and didn't hit MAX_ITEMS, add more from largest categories
+        if (sampled.length < MAX_ITEMS) {
+            const remaining = MAX_ITEMS - sampled.length;
+            const overflow = contextItems
+                .filter(item => !sampled.includes(item))
+                .sort((a, b) => b.priority - a.priority)
+                .slice(0, remaining);
+            sampled.push(...overflow);
+        }
+
+        // Limit to MAX_ITEMS total
+        const finalSample = sampled.slice(0, MAX_ITEMS);
+
+        console.log(`🎯 [ContextSampling] Reduced ${dependencies.length} deps → ${finalSample.length} items`);
+        console.log(`   📊 Categories: ${Object.entries(
+            finalSample.reduce((acc, item) => {
+                acc[item.category] = (acc[item.category] || 0) + 1;
+                return acc;
+            }, {} as Record<Category, number>)
+        ).map(([cat, count]) => `${cat}:${count}`).join(', ')}`);
+
+        return finalSample.map(({ path, content }) => ({ path, content }));
+    };
+
     const handleRegenerate = async (targetId: string) => {
         const target = localTargets.find(t => t.id === targetId);
         if (!target || !structure) return;
@@ -686,28 +809,39 @@ export function ContentReviewEditor({
             const tAny = target as any;
             const primarySourceText = tAny.sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
 
-            const secondaryContexts = (target.dependencies || []).map(depPath => {
-                const node = structure?.nodes?.find(n => {
-                    try {
-                        return new URL(n.url).pathname === depPath;
-                    } catch (e) {
-                        return false;
-                    }
-                });
-                if (node && node.content) {
-                    return {
-                        path: depPath,
-                        content: node.content.rawText || ''
-                    };
-                }
+            const dependencies = target.dependencies || [];
 
-                const depTarget = localTargets.find(lt => lt.path === depPath);
-                if (depTarget) {
-                    const content = (depTarget as any).sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
-                    return { path: depPath, content };
-                }
-                return null;
-            }).filter(Boolean) as { path: string, content: string }[];
+            // Apply intelligent sampling if we have many dependencies
+            let secondaryContexts: { path: string; content: string }[];
+
+            if (dependencies.length > 15) {
+                console.log(`⚠️ [Regenerate] Large dependency set detected (${dependencies.length} items) - applying smart sampling`);
+                secondaryContexts = sampleContextDiversely(dependencies, structure, localTargets);
+            } else {
+                // For small dependency sets, keep all items
+                secondaryContexts = dependencies.map(depPath => {
+                    const node = structure?.nodes?.find(n => {
+                        try {
+                            return new URL(n.url).pathname === depPath;
+                        } catch (e) {
+                            return false;
+                        }
+                    });
+                    if (node && node.content) {
+                        return {
+                            path: depPath,
+                            content: node.content.rawText || ''
+                        };
+                    }
+
+                    const depTarget = localTargets.find(lt => lt.path === depPath);
+                    if (depTarget) {
+                        const content = (depTarget as any).sourceDetails?.map((s: any) => s.content).join('\n\n') || '';
+                        return { path: depPath, content };
+                    }
+                    return null;
+                }).filter(Boolean) as { path: string, content: string }[];
+            }
 
             const sitemapSummary = localTargets.map(t => t.path);
 

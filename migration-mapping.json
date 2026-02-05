@@ -1,0 +1,67 @@
+{
+  "$schema": "./migration-mapping.schema.json",
+  "version": "1.0",
+  "migration_date": "2026-02-03",
+  "domain": "musikkreis-donnersberg.de",
+  "mapping": [
+    {
+      "old_url": "https://www.musikkreis-donnersberg.de/",
+      "new_path": "/",
+      "action": "merge",
+      "type": "layout",
+      "standalone": false,
+      "description": "Frameset container merged into modern homepage"
+    },
+    {
+      "old_url": "https://www.musikkreis-donnersberg.de/nav.htm",
+      "new_path": "/",
+      "action": "merge",
+      "type": "layout"
+    },
+    {
+      "old_url": "https://www.musikkreis-donnersberg.de/mainpage.htm",
+      "new_path": "/",
+      "action": "merge",
+      "type": "layout"
+    },
+    {
+      "old_url": "https://www.musikkreis-donnersberg.de/kontakte/dirigenten/1namen.htm",
+      "new_path": "/kontakte",
+      "action": "redirect",
+      "type": "page"
+    },
+    {
+      "old_url": "/kontakte/[slug]",
+      "new_path": "/partner",
+      "action": "redirect",
+      "type": "page"
+    },
+    {
+      "old_url": "/kontakte/[slug]",
+      "new_path": "/impressum",
+      "action": "redirect",
+      "type": "page"
+    },
+    {
+      "old_url": "/kontakte/[slug]",
+      "new_path": "/kontakte/[slug]",
+      "action": "keep",
+      "type": "page",
+      "description": "Kontaktseiten (Partner, Orchester, Impressum) modernisiert und hierarchisch geordnet"
+    },
+    {
+      "old_url": "/infothek/[slug]",
+      "new_path": "/infothek/[slug]",
+      "action": "keep",
+      "type": "page",
+      "description": "Informationsmaterialien werden als dynamisches Archiv geführt"
+    },
+    {
+      "old_url": "/termine/[slug]",
+      "new_path": "/termine/[slug]",
+      "action": "keep",
+      "type": "page",
+      "description": "Jahreskalender werden als chronologische Liste organisiert"
+    }
+  ]
+}

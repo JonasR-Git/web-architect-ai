@@ -148,10 +148,32 @@ export class WebCrawler extends EventEmitter {
             this.emit('complete', { nodes: this.nodes });
         }
 
+        // Calculate image statistics
+        const totalImages = this.nodes.reduce((sum, node) =>
+            sum + (node.content?.images?.length || 0), 0
+        );
+
+        const uniqueImages = new Set<string>();
+        this.nodes.forEach(node => {
+            node.content?.images?.forEach((img: any) => {
+                if (img.src) uniqueImages.add(img.src);
+            });
+        });
+
+        const unique = uniqueImages.size;
+        const deduplicationRate = totalImages > 0
+            ? ((totalImages - unique) / totalImages) * 100
+            : 0;
+
         return {
             rootUrl: this.rootUrl,
             nodes: this.nodes,
             crawledAt: new Date().toISOString(),
+            imageStats: {
+                total: totalImages,
+                unique,
+                deduplicationRate
+            }
         };
     }
 

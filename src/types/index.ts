@@ -104,6 +104,7 @@ export interface SiteNode {
         };
         // NEW: Advanced analysis results
         designSystem?: DesignSystemExtraction;
+        designSystemColors?: DesignSystemColors; // Image-based color palette (brand, hero, overall)
         contentType?: ContentTypeDetection;
         media?: MediaAnalysis;
     };
@@ -123,12 +124,22 @@ export interface SiteNode {
     };
     // NEW: For Concept-Based Mapping (Language Agnostic)
     variants?: { url: string; lang: string }[];
+
+    // NEW: Clustering Control - Mark pages as standalone (exclude from automatic clustering)
+    excludeFromClustering?: boolean; // If true, this page won't be clustered with similar pages
+    clusterExclusionReason?: string; // Why was this page excluded? (e.g., "Landing page", "Manually marked")
+    clusterExclusionTimestamp?: number; // When was this page marked as standalone?
 }
 
 export interface SiteStructure {
     rootUrl: string;
     nodes: SiteNode[];
     crawledAt: string;
+    imageStats?: {
+        total: number;          // Total image references across all pages
+        unique: number;         // Unique images (by URL)
+        deduplicationRate: number; // Percentage of duplicates (0-100)
+    };
 }
 
 export interface StackConfig {
@@ -152,6 +163,7 @@ export interface MockupSiteData {
     images?: any[];
     meta?: any;
     extractedColors?: any;
+    designSystemColors?: DesignSystemColors; // Image-based color palette
     componentSpec?: any;
     migrationPlan?: any;
     plannedContent?: any;
@@ -199,6 +211,14 @@ export interface MockupVariant {
     iteration: number;
     timestamp: number;
     archetype?: string;
+    isPremium?: boolean;
+    generationStages?: 5; // Always 5 for ultra-extreme generation
+    critique?: {
+        overall_score: number;
+        strengths: string[];
+        weaknesses: string[];
+        improvements: string[];
+    };
 }
 
 export interface DesignConfig {
@@ -213,11 +233,16 @@ export interface DesignConfig {
     theme: 'light' | 'dark' | 'system';
     roundness: 'sharp' | 'default' | 'soft' | 'full';
     typography: 'modern' | 'classic' | 'tech' | 'humanist';
+    // Style Preset (Optional foundation layer)
+    stylePreset?: 'minimal' | 'bold' | 'playful' | 'elegant' | 'brutalist' | 'custom';
+    // Design Level: Standard (ordentlich) → Semi-Unleashed (mittel) → Unleashed (chaotisch)
+    designLevel?: 'standard' | 'semi-unleashed' | 'unleashed';
+    // Ultra-Extreme Archetype Selection (only for Unleashed level)
+    selectedArchetype?: string; // e.g., 'reality-warp', 'liquid-mercury', 'void-architecture'
+    archetypeCategory?: string; // e.g., 'reality-manipulation', 'kinetic-expression', 'minimalism-extremes'
     // Creativity Settings
     creativity: 'standard' | 'balanced' | 'high' | 'experimental';
     creativeFocus: ('header' | 'footer' | 'navigation' | 'layout' | 'typography')[];
-    unleashedMode: 'off' | 'on' | 'on-with-colors'; // 'on' = Total freedom, 'on-with-colors' = Freedom but strict colors
-    unleashedArchetype?: 'chaos' | 'cinematic' | 'hightech' | 'luxury'; // Specific flavor of unleashed mode
     customInstructions: string;
     aiGeneratedInstructions: string;
 
@@ -257,11 +282,38 @@ export interface AIResponseMetadata {
     duration: string;
 }
 
+export interface PageMapping {
+    old_url: string;
+    new_path: string;
+    action: 'keep' | 'redirect' | 'merge' | 'delete';
+    reason?: string;
+    description?: string;
+    type?: 'page' | 'layout';
+    content_goals?: string[];
+    sections?: any[];
+}
+
+export interface PatternMapping {
+    pattern: string;
+    target_base: string;
+    action: 'keep' | 'redirect' | 'merge' | 'delete';
+    reason?: string;
+    description?: string;
+    type?: 'page' | 'layout';
+    content_goals?: string[];
+}
+
+export interface SitemapEntry {
+    path: string;
+    label: string;
+    type: 'page' | 'layout';
+}
+
 export interface MigrationPlan {
     rationale: string;
-    sitemap: { path: string; label: string; type: string }[];
-    page_mapping: { old_url: string; new_path: string; action: string; reason?: string; type?: 'page' | 'layout' }[];
-    pattern_mapping?: { pattern: string; target_base: string; action: string; reason?: string; type?: 'page' | 'layout' }[];
+    sitemap: SitemapEntry[];
+    page_mapping: PageMapping[];
+    pattern_mapping?: PatternMapping[];
     clusters?: ClusterSpec[];
     meta?: AIResponseMetadata;
 }
@@ -309,20 +361,40 @@ export interface SourcePage {
     count?: number;
 }
 
+export interface SectionImage {
+    src: string;
+    status: 'mandatory' | 'optional';
+    alt?: string;
+}
+
 export interface TargetSlot {
     id: string;
     path: string;
     label: string;
     type?: 'page' | 'layout';
-    action?: 'keep' | 'redirect' | 'merge' | 'delete';
+    action: 'keep' | 'redirect' | 'merge' | 'delete';
     sourceIds: string[];
     description?: string;
+    content_goals?: string[];
     sections?: {
         type: string;
+        title: string;
+        content_hint: string;
         headline?: string;
         content?: string;
-        images?: { src: string; alt?: string }[];
+        images?: SectionImage[];
     }[];
+    logos?: SectionImage[];
+    language?: string;
+    canonical?: string;
+    hreflangs?: { lang: string; url: string }[];
+    user_prompt?: string;
+    dependencies?: string[];
+    dependencies_detected?: boolean;
+    sourceDetails?: any[];
+    previousState?: TargetSlot;
+    lastGeneratedAt?: number;
+    lastModifiedAt?: number;
 }
 
 export interface UnmappedSource {
@@ -499,6 +571,32 @@ export interface ColorAnalysis {
     dominantColor: string;
     brightness: 'light' | 'medium' | 'dark';
     saturation: 'vibrant' | 'muted' | 'grayscale';
+}
+
+/**
+ * Positional color data extracted from specific regions of an image
+ * Enables harmonious transitions and contextual color matching
+ */
+export interface PositionalColors {
+    main: ColorPalette;           // Overall image palette (same as ColorAnalysis.palette)
+    top: string[];                // Top 20% - useful for sky, headers, fade-ins
+    bottom: string[];             // Bottom 20% - useful for ground, footers, fade-outs
+    left: string[];               // Left 20% - useful for sidebar transitions
+    right: string[];              // Right 20% - useful for content flow
+    center: string[];             // Center 40x40% - main subject colors
+    corners: {                    // Corner accent colors
+        topLeft: string;
+        topRight: string;
+        bottomLeft: string;
+        bottomRight: string;
+    };
+}
+
+/**
+ * Enhanced image color analysis with positional data
+ */
+export interface ImageColorAnalysis extends ColorAnalysis {
+    positional?: PositionalColors; // Optional positional breakdown for advanced use cases
 }
 
 /**
@@ -704,4 +802,102 @@ export interface MediaAnalysis {
     interactiveElements: InteractiveElement[];
     hasAudio: boolean;
     hasSvgAnimations: boolean;
+}
+
+// ==================== REFACTORING: NEW TYPE SAFETY TYPES ====================
+
+/**
+ * Critique/Audit result from AI analysis
+ */
+export interface CritiqueResult {
+    summary: string;
+    issues: {
+        category: string;
+        severity: 'critical' | 'warning' | 'notice';
+        message: string;
+    }[];
+    recommendations: string[];
+    _meta?: AIResponseMetadata;
+}
+
+/**
+ * Final output combining spec and implementation plan
+ */
+export interface FinalOutput {
+    spec: any; // TODO: Define proper spec type structure
+    implPlan: ImplementationPlan;
+}
+
+/**
+ * Implementation plan structure
+ */
+export interface ImplementationPlan {
+    phases: {
+        name: string;
+        description: string;
+        tasks: string[];
+    }[];
+    content_files?: {
+        path: string;
+        content: string;
+    }[];
+    dependencies: string[];
+    structure?: any;
+    _meta?: AIResponseMetadata;
+}
+
+/**
+ * Custom asset uploaded by user
+ */
+export interface CustomAsset {
+    id: string;
+    src: string;
+    alt?: string;
+    type: 'logo' | 'icon' | 'custom';
+}
+
+/**
+ * Log entry for process logging
+ */
+export interface LogEntry {
+    id: string;
+    timestamp: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error';
+    meta?: AIResponseMetadata;
+}
+
+/**
+ * Real-time crawl statistics
+ */
+export interface CrawlStats {
+    processed: number;
+    found: number;
+    currentUrl: string;
+    queueLength: number;
+    activeWorkers?: number;
+}
+
+/**
+ * Downloaded assets with base64 and mapping
+ */
+export interface DownloadedAssets {
+    images: Record<string, string>;  // filename -> base64
+    map: Record<string, string>;     // originalUrl -> filename
+}
+
+/**
+ * Token usage statistics
+ */
+export interface TokenStats {
+    totalIn: number;
+    totalOut: number;
+}
+
+/**
+ * Generic progress tracking
+ */
+export interface Progress {
+    current: number;
+    total: number;
 }

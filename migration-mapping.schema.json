@@ -1,0 +1,112 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Migration Mapping Configuration",
+  "description": "Defines how old website URLs map to new website structure, including clustering control",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference"
+    },
+    "version": {
+      "type": "string",
+      "description": "Schema version for future compatibility",
+      "default": "1.0"
+    },
+    "migration_date": {
+      "type": "string",
+      "format": "date",
+      "description": "Date when this migration mapping was created"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Domain name being migrated (without protocol)"
+    },
+    "mapping": {
+      "type": "array",
+      "description": "Array of URL mapping rules",
+      "items": {
+        "type": "object",
+        "required": ["old_url", "new_path", "action", "type"],
+        "properties": {
+          "old_url": {
+            "type": "string",
+            "description": "Original URL from old website (can be full URL or relative path). Supports patterns like /path/[slug]"
+          },
+          "new_path": {
+            "type": "string",
+            "description": "New path in modern website structure"
+          },
+          "action": {
+            "type": "string",
+            "enum": ["keep", "redirect", "merge", "delete"],
+            "description": "What to do with this URL: keep (preserve), redirect (301/302), merge (combine with other content), delete (archive)"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["page", "layout", "asset"],
+            "description": "Type of content being mapped"
+          },
+          "status": {
+            "type": "integer",
+            "enum": [200, 301, 302, 410],
+            "description": "HTTP status code for redirects (301=permanent, 302=temporary, 410=gone)",
+            "default": 200
+          },
+          "priority": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "description": "Priority when multiple patterns match (higher = processed first)",
+            "default": 10
+          },
+          "standalone": {
+            "type": "boolean",
+            "description": "If true, this page will NOT be clustered with similar pages during automatic grouping",
+            "default": false
+          },
+          "excludeFromClustering": {
+            "type": "boolean",
+            "description": "Alias for 'standalone' - exclude from automatic clustering",
+            "default": false
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable explanation of this mapping rule"
+          },
+          "content_migrated": {
+            "type": "boolean",
+            "description": "Has the content been migrated to the new site?",
+            "default": false
+          },
+          "migrated_at": {
+            "type": "string",
+            "format": "date",
+            "description": "When was this content migrated?"
+          },
+          "old_url_pattern": {
+            "type": "string",
+            "description": "Regular expression pattern for matching multiple URLs (advanced usage)"
+          },
+          "new_path_template": {
+            "type": "string",
+            "description": "Template for new path with capture group placeholders {1}, {2}, etc."
+          },
+          "use_regex": {
+            "type": "boolean",
+            "description": "If true, use old_url_pattern as regex instead of old_url",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tags for organizing/filtering mappings (e.g., ['landing-page', 'high-priority'])"
+          }
+        }
+      }
+    }
+  },
+  "required": ["mapping"]
+}

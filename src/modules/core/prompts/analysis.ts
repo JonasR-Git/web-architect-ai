@@ -56,71 +56,87 @@ Output JSON only:
  `;
 
 
-export const MIGRATION_SYSTEM_PROMPT = `You are a Senior System Architect.
- Modernize an existing website structure into a best-in-class V3 architecture.
- 
- DEFINITIONS:
- - UNIQUE PAGES: Pages that appear once and have specific content.
- - CLUSTERS (ARCHETYPES): Groups of pages following a pattern (e.g., /blog/*). Provided with representative examples.
- 
- RULES:
- 1. DOCUMENTATION (HIGHEST PRIORITY):
-    - DOCUMENT GLOBAL ELEMENTS: You MUST create at least one entry in "sitemap" with type: 'layout'. This entry represents the Header, Footer, and Main Navigation that is shared across the entire site. Use path: 'layout' or similar.
-    - Document EVERY CLUSTER in "pattern_mapping".
-    - Document UNIQUE SOURCE PAGES in "page_mapping" ONLY if they do NOT fit into any pattern.
-    - PROHIBITED: Do NOT list individual pages in "page_mapping" if they are already covered by a "pattern_mapping" entry.
-    - CONSOLIDATION: If you find yourself mapping 3+ individual pages from the same source folder to the same destination, you MUST create a wildcard entry in "pattern_mapping" instead.
- 2. DECISION REASONING: For each entry, explain your reasoning in the "reason" field (German language).
- 3. MERGING: Specify the target in "merged_with". Combine thin content (< 300 words) into hubs or parents.
- 4. NAMING: Use lowercase kebab-case for new paths. [slug] is the placeholder for dynamic segments.
- 5. MODERN STRUCTURE REASONING:
-    - Explain the logical hubs chosen (e.g., /insights/ vs /blog/).
-    - JUSTIFICATION: Any merging of distinct archetypes or flattening of folders MUST be explicitly justified.
- 6. CLUSTER MAPPING (ATOMICITY):
-    - **ATOMIC UNIT**: A cluster is an indivisible unit. Map the ENTIRE pattern to a new 'target_base'.
-    - **NO SPLITTING**: It is FORBIDDEN to map individual pages from a cluster to different locations.
-    - **STRUCTURAL PRESERVATION**: Maintain distinction between fundamentally different archetypes. Do not merge patterns into a single target unless they share the EXACT same visual template and business purpose.
-    - **HIERARCHICAL DEPTH**: Prefer multi-level sub-folders over flat mapping. When moving clusters to a new hub, preserve their categorical identity via sub-paths instead of mapping them directly to the hub root.
-    - **NO INDIVIDUAL EXCEPTIONS**: Do not create "page_mapping" entries for pages that match a "pattern_mapping".
-    - Archive Roots: If a source archive (e.g., /blog/) is moved, it must be mapped to the new archive root.
-    - Template Pages: Every cluster MUST result in a dynamic "Template Page" in the sitemap (e.g., /blog/[slug]).
- 7. PROTECTED PAGES: Keep functional pages (Contact, Privacy, etc.) even if text is thin.
- 8. MULTI-LANGUAGE HANDLING (GENERAL VALIDITY):
-    - **IGNORE LANGUAGE PREFIXES**: When identifying patterns, ignore language segments in URLs (e.g., /de/, /en/, /fr/).
-    - **UNIFIED MAPPING**: Map language variants to the SAME target pattern.
-      - Example: '/de/produkte/a' and '/en/products/a' should BOTH map to pattern '/products/[slug]'.
-    - **NO DUPLICATE PATTERNS**: Do NOT create separate patterns for different languages (e.g., do NOT create '/de/blog' and '/en/blog'). Create ONE '/blog' pattern.
-    - **CONCEPT AWARENESS**: The nodes you see are "Concept Nodes". They represent a group of language variants.
-      - **CHECK THE 'variants' FIELD**: Each node has a \`variants\` array listing the specific URLs for each language (e.g. \`[{ lang: 'de', url: '...' }, { lang: 'en', url: '...' }]\`). Use this to confirm which languages are present.
-    - **CANONICAL STRATEGY**: 
-      - If you detect duplicates that are NOT just language variants (e.g. tracking params, printer-friendly versions), identify the CANONICAL concept.
-      - Explicitly Map the non-canonical versions to the Canonical Target with action: 'redirect'.
- 
- Output JSON only:
- {
-   "strategic_reasoning": "Detailed explanation of structural changes (Chain-of-Thought)",
-   "sitemap": [{
-     "path": "string (use [slug] for clusters)",
-     "label": "string",
-     "type": "page" | "layout",
-     "sources": ["string (URLs or patterns)"]
-   }],
-   "page_mapping": [{
-     "old_url": "string (Unique pages only)",
-     "new_path": "string",
-     "action": "keep" | "merge" | "redirect" | "delete",
-     "type": "page" | "layout",
-     "reason": "string (German)",
-     "merged_with": "string | null"
-   }],
-   "pattern_mapping": [{
-     "pattern": "string (EXACT pattern name from input structure)",
-     "target_base": "string (e.g. /insights/blog/)",
-     "action": "keep" | "redirect" | "merge",
-     "type": "page" | "layout",
-     "reason": "string (German)"
-   }]
- }`;
+export const MIGRATION_SYSTEM_PROMPT = `You are a Senior System Architect modernizing website structures.
+
+# CRITICAL OUTPUT CONSTRAINTS (MUST FOLLOW)
+1. pattern_mapping is MANDATORY - NEVER return empty array
+2. If pattern has [slug], target_base MUST include [slug]
+3. NEVER add trailing slashes to paths (except root /)
+4. All paths MUST use lowercase kebab-case
+5. reason fields MUST be in German
+
+# EXAMPLES - CORRECT vs WRONG
+
+## ✅ CORRECT Pattern Mapping:
+{
+  "pattern": "/blog/[slug]",
+  "target_base": "/insights/[slug]",  // Has [slug]!
+  "action": "redirect",
+  "type": "page",
+  "reason": "Blog wird zu Insights modernisiert"
+}
+
+## ❌ WRONG - Missing [slug]:
+{
+  "pattern": "/blog/[slug]",
+  "target_base": "/insights/",  // Missing [slug]! Will break!
+  "action": "redirect"
+}
+
+## ❌ WRONG - Trailing slash:
+{
+  "old_url": "/about",
+  "new_path": "/ueber-uns/",  // Remove trailing slash!
+  "action": "keep"
+}
+
+# INPUT STRUCTURE
+- UNIQUE PAGES: Appear once (e.g., /about, /contact)
+- CLUSTERS: Pattern-based groups (e.g., /blog/[slug])
+- Each node may have \`variants\` array for multi-language
+
+# MAPPING RULES:
+1. ALWAYS create pattern_mapping for EVERY cluster in input
+2. Global layout MUST be in sitemap with type: "layout" (path: "layout")
+3. Unique pages → page_mapping, Cluster pages → pattern_mapping
+4. If 3+ similar pages, create pattern instead
+5. Preserve functional pages (Contact, Privacy) even if thin
+6. Multi-language: All variants map to ONE pattern (/de/blog + /en/blog → /blog/[slug])
+7. Clusters are atomic - map ENTIRE pattern, never split
+8. Prefer hierarchical depth over flat structure
+
+# OUTPUT SCHEMA
+{
+  "rationale": "string (German explanation)",
+  "sitemap": [{
+    "path": "string (NO trailing slash, use [slug] for dynamic)",
+    "label": "string",
+    "type": "page" | "layout"
+  }],
+  "page_mapping": [{
+    "old_url": "string (ONLY unique pages)",
+    "new_path": "string (NO trailing slash)",
+    "action": "keep" | "merge" | "redirect" | "delete",
+    "type": "page" | "layout",
+    "reason": "string (German)"
+  }],
+  "pattern_mapping": [{
+    "pattern": "string (from input)",
+    "target_base": "string (MUST have [slug] if pattern has it)",
+    "action": "keep" | "redirect" | "merge",
+    "type": "page",
+    "reason": "string (German)"
+  }]
+}
+
+# PRE-OUTPUT CHECKLIST
+- [ ] pattern_mapping NOT empty
+- [ ] All [slug] patterns have [slug] in target_base
+- [ ] No trailing slashes (except "/")
+- [ ] All reason fields in German
+- [ ] sitemap includes layout entry
+
+Output ONLY valid JSON.`;
 
 export function buildStyleExtractorPrompt(htmlPreview: string) {
    return [

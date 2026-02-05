@@ -139,18 +139,61 @@ export async function generateMigrationAction(structure: SiteStructure, userInst
         // NORMALIZE STRUCTURE FOR AI
         const normalizedStructure = normalizeStructureToConcepts(structure, semanticMerges);
 
-        // We still need 'grouped' for the UI clusters metadata (Using Normalized Structure!)
-        const grouped = groupSimilarPages(normalizedStructure, 3, 5, overrides);
+        // FILTER OUT STANDALONE PAGES (excludeFromClustering = true)
+        // These pages should not be clustered automatically
+        const { filterClusterablePages } = await import('@/lib/utils/page-clustering');
+        const { clusterable, excluded } = filterClusterablePages(normalizedStructure.nodes, {
+            respectManualFlags: true
+        });
 
-        const data = await ai.generateMigrationPlan(normalizedStructure, userInstructions, overrides, semanticMerges);
+        console.log(`[Clustering] ${clusterable.length} clusterable, ${excluded.length} standalone pages`);
+
+        // Create structure with only clusterable pages for grouping algorithm
+        const clusterableStructure = {
+            ...normalizedStructure,
+            nodes: clusterable
+        };
+
+        // Group similar pages (only clusterable pages for the grouping algorithm!)
+        const grouped = groupSimilarPages(clusterableStructure, 3, 5, overrides);
+
+        // ============================================================================
+        // CREATE CLUSTER METADATA (without modifying original structure)
+        // ============================================================================
+        // Build a mapping of URL -> Cluster Info for the AI prompt
+        const clusterMetadata = {
+            clusters: grouped.groups.map(g => ({
+                pattern: g.pattern,
+                urls: g.allUrls
+            })),
+            uniquePages: excluded.map(n => n.url)
+        };
+
+        console.log(`\n[AI Input] Sending structure + cluster metadata:`);
+        console.log(`  📦 Total pages: ${normalizedStructure.nodes.length}`);
+        console.log(`  🔗 Clustered: ${clusterMetadata.clusters.reduce((sum, c) => sum + c.urls.length, 0)} pages in ${clusterMetadata.clusters.length} clusters`);
+        console.log(`  ⭐ Unique pages: ${clusterMetadata.uniquePages.length}`);
+        console.log(`  Clusters:`, clusterMetadata.clusters.map(c => `${c.pattern} (${c.urls.length})`).join(', '));
+        console.log('');
+
+        // Pass cluster metadata via overrides so AI knows about clustering
+        const aiOverrides = {
+            ...overrides,
+            // Store cluster info for AI to use
+            _clusterMetadata: clusterMetadata
+        };
+
+        const data = await ai.generateMigrationPlan(normalizedStructure, userInstructions, aiOverrides, semanticMerges);
 
         // ENHANCED: Content-based Cluster Analysis
         console.log('📊 [ContentAnalysis] Analyzing cluster similarity...');
         const { ContentSimilarityAnalyzer } = await import('@/modules/analysis/services/content-similarity-analyzer');
 
         // --- Cluster Data Population for Cluster Component Architecture ---
+        // Create clusters from grouped pages (these are only the clusterable pages)
         const clusters: ClusterSpec[] = grouped.groups.map((group, idx) => {
             const instances: PageInstance[] = group.allUrls.map(url => {
+                // Find node in normalizedStructure (contains all pages)
                 const node = normalizedStructure.nodes.find(n => n.url === url);
                 return {
                     url,
@@ -168,15 +211,66 @@ export async function generateMigrationAction(structure: SiteStructure, userInst
             };
         });
 
+        // ADD STANDALONE PAGES AS INDIVIDUAL "CLUSTERS"
+        // These pages were excluded from clustering but should still appear in the migration plan
+        const standaloneClusters: ClusterSpec[] = excluded.map((node, idx) => ({
+            id: `standalone_${idx}`,
+            pattern: node.url, // Use full URL as pattern for standalone pages
+            instances: [{
+                url: node.url,
+                title: node.meta?.title || 'Unknown Title',
+                wordCount: node.content?.wordCount || 0,
+                assetsFound: node.content?.images?.length || 0,
+                status: 'pending'
+            }]
+        }));
+
+        // Combine regular clusters with standalone "clusters"
+        const allClusters = [...clusters, ...standaloneClusters];
+
+        console.log(`[Clustering] Created ${clusters.length} pattern clusters + ${standaloneClusters.length} standalone pages`);
+
         // Attach clusters to result
         if (data) {
-            (data as any).clusters = clusters;
+            (data as any).clusters = allClusters;
+
+            // ENSURE UNIQUE PAGES ARE IN PAGE_MAPPING
+            // The AI saw all pages with _isUniquePage flags
+            // We verify unique pages are in page_mapping with their full URLs (not clustered)
+            if (data.page_mapping && excluded.length > 0) {
+                const existingUrls = new Set(data.page_mapping.map(m => m.old_url));
+                const missingUniquePages = excluded.filter(node => !existingUrls.has(node.url));
+
+                if (missingUniquePages.length > 0) {
+                    console.log(`[Unique Pages] Adding ${missingUniquePages.length} missing unique pages to page_mapping`);
+
+                    const uniquePageMappings = missingUniquePages.map(node => ({
+                        old_url: node.url,
+                        new_path: node.url, // Keep full URL for unique pages
+                        action: 'keep' as const,
+                        reason: 'Unique page (excluded from clustering)',
+                        description: node.meta?.description || '',
+                        type: 'page' as const,
+                        content_goals: [] as string[]
+                    }));
+
+                    // Add unique page mappings to the page_mapping array
+                    data.page_mapping = [
+                        ...data.page_mapping,
+                        ...uniquePageMappings
+                    ];
+
+                    console.log(`[Unique Pages] Added ${uniquePageMappings.length} unique pages to page_mapping`);
+                } else {
+                    console.log(`[Unique Pages] All ${excluded.length} unique pages already in page_mapping ✓`);
+                }
+            }
 
             // Enrich migration plan with content-based tags
-            if (clusters.length > 0) {
+            if (allClusters.length > 0) {
                 const enrichedData = ContentSimilarityAnalyzer.enrichMigrationPlanWithTags(
                     data,
-                    clusters,
+                    allClusters,
                     normalizedStructure
                 );
 
@@ -400,6 +494,269 @@ export async function generateVisualMockupAction(
         return { success: true, data: htmlContent };
     } catch (error: any) {
         console.error('AI Error (Visual Mockup):', error);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Premium 3-Stage Mockup Generation
+ * Uses iterative refinement with self-critique for top-tier design quality
+ */
+export async function generatePremiumMockupAction(
+    designConfig: DesignConfig,
+    componentSpec: any,
+    pageSpec: any,
+    onProgress?: (stage: number, message: string) => void
+) {
+    console.log(`[PremiumMockup] Starting 3-stage generation with preset: ${designConfig.stylePreset}`);
+
+    if (USE_MOCK) {
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        return {
+            success: true,
+            data: {
+                html: `<div class="min-h-screen bg-background text-text p-8">
+                    <h1 class="text-4xl font-bold">Premium Mock Mockup</h1>
+                    <p>This is a premium 3-stage mock mockup.</p>
+                </div>`,
+                critique: {
+                    overall_score: 85,
+                    strengths: ['Clean layout', 'Good typography', 'Strong hierarchy'],
+                    weaknesses: ['Could use more whitespace'],
+                    improvements: ['Increase section spacing by 20%'],
+                },
+            },
+            isMock: true,
+        };
+    }
+
+    try {
+        const ai = new AIService();
+        const { generateStage1Prompt, generateStage2Prompt, generateStage3Prompt } = await import(
+            '@/modules/design/services/premium-mockup-generator'
+        );
+
+        // Stage 1: Layout & Structure
+        console.log('[PremiumMockup] Stage 1: Layout & Structure');
+        const stage1Prompt = generateStage1Prompt(designConfig, componentSpec, pageSpec);
+        const stage1Html = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage1Prompt }],
+            undefined,
+            'Premium Stage 1: Layout'
+        );
+
+        // Stage 2: Visual Refinement
+        console.log('[PremiumMockup] Stage 2: Visual Refinement');
+        const stage2Prompt = generateStage2Prompt(designConfig, stage1Html);
+        const stage2Html = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage2Prompt }],
+            undefined,
+            'Premium Stage 2: Refinement'
+        );
+
+        // Stage 3: Self-Critique & Polish
+        console.log('[PremiumMockup] Stage 3: Self-Critique & Polish');
+        const stage3Prompt = generateStage3Prompt(designConfig, stage2Html);
+        const stage3Response = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage3Prompt }],
+            undefined,
+            'Premium Stage 3: Critique'
+        );
+
+        // Parse critique and HTML from response
+        let finalHtml = stage3Response;
+        let critique: any = undefined;
+
+        // Try to extract critique JSON if present
+        const critiqueMatch = stage3Response.match(/```json\n([\s\S]*?)\n```/);
+        if (critiqueMatch) {
+            try {
+                critique = JSON.parse(critiqueMatch[1]);
+                // Remove critique from HTML
+                finalHtml = stage3Response.replace(/```json[\s\S]*?```/, '').trim();
+            } catch (e) {
+                console.warn('[PremiumMockup] Failed to parse critique:', e);
+            }
+        }
+
+        console.log(`[PremiumMockup] Complete! Score: ${critique?.overall_score || 'N/A'}/100`);
+
+        return {
+            success: true,
+            data: {
+                html: finalHtml,
+                critique,
+            },
+        };
+    } catch (error: any) {
+        console.error('[PremiumMockup] Error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Generate Ultra-Extreme Mockup using 5-Stage Process
+ *
+ * Stage 1: Foundation (Mimo-v2-flash)
+ * Stage 2: Archetype Application (Mimo-v2-flash)
+ * Stage 3: Experimental Push (Sonnet 3.5, temp=0.9)
+ * Stage 4: Self-Critique (Mimo-v2-flash)
+ * Stage 5: Extreme Polish (Sonnet 3.5)
+ *
+ * Models are configurable via .env (MOCKUP_STAGE1_MODEL, etc.)
+ */
+export async function generateUltraExtremeMockupAction(
+    designConfig: DesignConfig,
+    componentSpec: any,
+    pageSpec: any,
+    siteData?: any,  // ADDED: Site data with homepage content
+    variationSeed?: number,
+    onProgress?: (stage: number, message: string) => void
+) {
+    const designLevel = designConfig.designLevel || 'standard';
+    console.log(`[${designLevel.toUpperCase()}] Starting 5-stage generation with archetype: ${designConfig.selectedArchetype}, variation: ${variationSeed || 1}`);
+
+    // Validate archetype selection
+    if (!designConfig.selectedArchetype) {
+        return {
+            success: false,
+            error: 'No archetype selected. Please select an ultra-extreme archetype first.',
+        };
+    }
+
+    if (USE_MOCK) {
+        await new Promise(resolve => setTimeout(resolve, 8000));
+        return {
+            success: true,
+            data: {
+                html: `<div class="min-h-screen bg-black text-white p-8">
+                    <h1 class="text-6xl font-bold transform -rotate-2">Ultra-Extreme Mock Mockup</h1>
+                    <p class="text-2xl mt-8">This is a 5-stage ultra-extreme mock mockup with ${designConfig.selectedArchetype}.</p>
+                </div>`,
+                critique: {
+                    overall_score: 75,
+                    strengths: ['Extreme archetype expression', 'Bold experimental choices', 'Unique design'],
+                    weaknesses: ['Could push boundaries further'],
+                    improvements: ['Add more asymmetry', 'Break one more conventional rule'],
+                },
+            },
+            isMock: true,
+        };
+    }
+
+    try {
+        const ai = new AIService();
+        const {
+            generateStage1Prompt,
+            generateStage2Prompt,
+            generateStage3Prompt,
+            generateStage4Prompt,
+            generateStage5Prompt,
+            extractCritiqueFromResponse,
+            extractHtmlFromResponse,
+        } = await import('@/modules/design/services/ultra-extreme-generator');
+        const { getArchetypesByLevel } = await import('@/modules/design/data/all-archetypes');
+
+        // Get archetype data from the appropriate level
+        const archetypes = getArchetypesByLevel(designLevel);
+        const archetype = archetypes.find(a => a.id === designConfig.selectedArchetype);
+        if (!archetype) {
+            return {
+                success: false,
+                error: `Invalid archetype: ${designConfig.selectedArchetype} for level ${designLevel}`,
+            };
+        }
+
+        // Load model configuration from .env (with fallbacks)
+        const STAGE_MODELS = {
+            stage1: process.env.MOCKUP_STAGE1_MODEL || 'xiaomi/mimo-v2-flash',
+            stage2: process.env.MOCKUP_STAGE2_MODEL || 'xiaomi/mimo-v2-flash',
+            stage3: process.env.MOCKUP_STAGE3_MODEL || 'anthropic/claude-3.5-sonnet',
+            stage4: process.env.MOCKUP_STAGE4_MODEL || 'xiaomi/mimo-v2-flash',
+            stage5: process.env.MOCKUP_STAGE5_MODEL || 'anthropic/claude-3.5-sonnet',
+        };
+
+        const STAGE3_TEMP = parseFloat(process.env.MOCKUP_STAGE3_TEMPERATURE || '0.9');
+
+        console.log(`[${designLevel.toUpperCase()}] Model config:`, {
+            level: designLevel,
+            archetype: archetype.name,
+            variation: variationSeed || 1,
+            stage1: STAGE_MODELS.stage1,
+            stage2: STAGE_MODELS.stage2,
+            stage3: `${STAGE_MODELS.stage3} (temp=${STAGE3_TEMP})`,
+            stage4: STAGE_MODELS.stage4,
+            stage5: STAGE_MODELS.stage5,
+        });
+
+        // Stage 1: Foundation (Layout & Structure)
+        console.log(`[${designLevel.toUpperCase()}] Stage 1/5: Foundation (Layout & Structure) - Variation ${variationSeed || 1}`);
+        onProgress?.(1, 'Building foundation layout...');
+        const stage1Prompt = generateStage1Prompt(designConfig, componentSpec, pageSpec, siteData, variationSeed);
+        const stage1Html = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage1Prompt }],
+            { model: STAGE_MODELS.stage1 },
+            `${designLevel} Stage 1: Foundation`
+        );
+
+        // Stage 2: Archetype Application
+        console.log(`[${designLevel.toUpperCase()}] Stage 2/5: Archetype Application (${archetype.name})`);
+        onProgress?.(2, `Applying ${archetype.name} archetype...`);
+        const stage2Prompt = generateStage2Prompt(archetype, stage1Html, designConfig);
+        const stage2Html = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage2Prompt }],
+            { model: STAGE_MODELS.stage2 },
+            `${designLevel} Stage 2: Archetype`
+        );
+
+        // Stage 3: Experimental Push (Design Level Aware)
+        const stage3Label = designLevel === 'standard' ? 'Refinement' : designLevel === 'semi-unleashed' ? 'Creative Push' : 'Experimental Push';
+        console.log(`[${designLevel.toUpperCase()}] Stage 3/5: ${stage3Label}`);
+        onProgress?.(3, designLevel === 'standard' ? 'Refining and polishing...' : designLevel === 'semi-unleashed' ? 'Adding creative flair...' : 'Pushing boundaries and breaking rules...');
+        const stage3Prompt = generateStage3Prompt(stage2Html, archetype, designConfig);
+        const stage3Html = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage3Prompt }],
+            { model: STAGE_MODELS.stage3, temperature: STAGE3_TEMP },
+            `${designLevel} Stage 3: ${stage3Label}`
+        );
+
+        // Stage 4: Self-Critique
+        console.log(`[${designLevel.toUpperCase()}] Stage 4/5: Self-Critique`);
+        onProgress?.(4, 'Analyzing design quality...');
+        const stage4Prompt = generateStage4Prompt(stage3Html, archetype);
+        const stage4Response = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage4Prompt }],
+            { model: STAGE_MODELS.stage4 },
+            `${designLevel} Stage 4: Critique`
+        );
+
+        // Extract critique and HTML from Stage 4 response
+        const critique = extractCritiqueFromResponse(stage4Response);
+        const stage4Html = extractHtmlFromResponse(stage4Response);
+
+        console.log(`[${designLevel.toUpperCase()}] Critique Score: ${critique.overall_score}/100`);
+
+        // Stage 5: Final Polish
+        console.log(`[${designLevel.toUpperCase()}] Stage 5/5: Final Polish`);
+        onProgress?.(5, 'Adding final polish and refinements...');
+        const stage5Prompt = generateStage5Prompt(stage4Html, critique, archetype, designLevel);
+        const finalHtml = await (ai as any).callAIRaw(
+            [{ role: 'user', content: stage5Prompt }],
+            { model: STAGE_MODELS.stage5 },
+            `${designLevel} Stage 5: Polish`
+        );
+
+        console.log(`[${designLevel.toUpperCase()}] Complete! Final Score: ${critique.overall_score}/100 (Variation ${variationSeed || 1})`);
+
+        return {
+            success: true,
+            data: {
+                html: finalHtml,
+                critique,
+            },
+        };
+    } catch (error: any) {
+        console.error('[UltraExtreme] Error:', error);
         return { success: false, error: error.message };
     }
 }

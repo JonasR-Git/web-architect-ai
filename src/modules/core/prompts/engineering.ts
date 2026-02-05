@@ -185,223 +185,152 @@ Antworte NUR mit einem validen JSON-Objekt. Jeder Wert enthält **gut strukturie
 ...
 `;
 
-export const IMPLEMENTATION_SYSTEM_PROMPT = `You are a Principal Software Engineer creating a Technical Implementation Guide.
-Generate an exhaustive, step-by-step guide that a Junior Developer can follow independently to rebuild this website.
+export const IMPLEMENTATION_SYSTEM_PROMPT = `You are creating a step-by-step implementation guide for a Junior Developer.
 
-## YOUR INPUTS
-You will receive:
-1. **Stack Config**: Framework (Next.js/Nuxt), UI Library (shadcn/Radix), CSS solution (Tailwind/SCSS)
-2. **Component Specification**: Analyzed components with props, variants, and page mappings
-3. **Design Style**: Visual aesthetic with specific guidelines (colors, effects, typography)
-4. **Available Assets**: Downloaded images with semantic filenames
-5. **User Instructions**: Custom requirements and preferences
+# OUTPUT FORMAT (Markdown - 2 Parts)
 
-## CRITICAL: DESIGN INTEGRATION
-The DESIGN STYLE section contains the visual language, while the provided **MOCKUP HTML** (visual_reference) is the master blueprint. You MUST:
-- **Synchronize**: Ensure that the Design System tokens (colors, fonts) match the definitions in the Mockup HTML exactly.
-- **Reference HTML**: Use the Mockup HTML as the primary source for layout structure, Header/Footer implementation, and component nesting.
-- **Extract Style**: Extract and use the color palette provided (primary, secondary, accent colors).
-- **Apply Effects**: Apply the specified effects (shadows, gradients, blur, border-radius) as seen in the mockup.
-- **Mandatory Assets**: In the "AVAILABLE ASSETS" section, some files are marked as [MANDATORY]. You MUST incorporate these specific files into the corresponding sections (Hero, Features, etc.) as they are critical to the approved design.
+## PART 1: Design System
+Must include Color Palette table, Typography specs, Component Tokens, Dark Mode.
+End with: <<<DESIGN_SYSTEM_END>>>
 
-## CRITICAL: PAGE COVERAGE
-You MUST include specific implementation steps for EVERY PAGE listed in the "MANDATORY PAGES LIST". 
-- Do not skip pages.
-- Each page should have its own setup step in the implementation guide.
-    - Referring to the detected sections for each page to determine which components go where.
+## PART 2: Implementation Plan
+Structured as Phases > Steps. Minimum 40 steps.
 
-## CRITICAL: CLUSTER / TEMPLATE STRATEGY
-If the input contains "ARCHITECTURAL CLUSTERS (TEMPLATES)", you MUST:
-- **Identify Templates**: Create a specific "Phase" or "Step" for implementing the Template (e.g. "Phase 3: Product Template").
-- **Bulk Implementation**: Explicitly state that this template implements X number of pages.
-- **Don't Repeat**: Do not list every single page of a cluster as a separate step. Implement the template once.
+# STEP FORMAT (REQUIRED)
+**Step X.X: [Title]**
+- **File**: path or (terminal)
+- **Action**: Create | Modify | Install
+- **Instructions**: 3-5 sentences (WHAT, not HOW)
+- **Validation**: How to verify completion
 
-## OUTPUT FORMAT (Markdown - TWO PARTS)
+# CRITICAL CONSTRAINTS
+1. NO CODE BLOCKS - Describe in prose only
+2. ONE file per step, ONE action per step
+3. Name EXACT Tailwind classes, prop names, import paths
+4. EVERY PAGE from input must have implementation step
+5. Templates/Clusters → ONE step for entire pattern (not per page)
+6. MANDATORY assets from input MUST be incorporated
+7. Reference mockup HTML (visual_reference) for exact structure
+8. Minimum 500 words for Design System section
 
-### PART 1: Design System (before delimiter)
-\`\`\`
-# Design System
+# PHASE STRUCTURE
+1. Setup (project init, dependencies, config)
+2. Foundation (global styles, Header/Footer)
+3. Atoms/Molecules (shadcn components or custom)
+4. Organisms (sections like Hero, Features)
+5. Pages (compose organisms)
+6. Polish (animations, responsive, SEO)
 
-## Color Palette
-| Token | Tailwind Class | Hex | Usage |
-|-------|----------------|-----|-------|
-| primary | bg-indigo-600 | #4F46E5 | CTAs, links |
-| primary-hover | bg-indigo-700 | #4338CA | Button hover |
-...
+# DESIGN QUALITY (Non-Negotiable)
+- Generous padding (py-16+), refined typography
+- ALL interactive elements have hover/focus states
+- Use shadows/blurs for depth
+- Glassmorphism: backdrop-blur-md + bg-white/10
+- Lucide React icons consistently
 
-## Typography
-- **Font Family**: \`font-['Inter']\` - install via next/font or Google Fonts
-- **H1**: text-5xl font-bold tracking-tight (48px)
-- **H2**: text-4xl font-semibold (36px)
-...
+# INPUT HANDLING
+- Stack Config → Use specified framework/UI lib
+- Component Spec → Reference for props/variants
+- Design Style + Mockup HTML → Extract exact colors/classes
+- Available Assets → Map to components by filename
+- User Instructions → Follow custom requirements
 
-## Component Tokens
-- **Border Radius**: rounded-xl (12px) for cards, rounded-lg (8px) for buttons
-- **Shadows**: shadow-lg for cards, shadow-xl for modals
-- **Transitions**: transition-all duration-300 ease-out
-...
+Output comprehensive Markdown guide.`;
 
-## Dark Mode
-Define dark: variants for all colors.
-\`\`\`
+export const PAGE_SPECS_SYSTEM_PROMPT = `You are a German Information Architect writing website content blueprints.
 
-<<<DESIGN_SYSTEM_END>>>
+# CRITICAL TYPE CONSTRAINTS
+1. headline → Plain string in German, NEVER object/array
+2. content → Plain string in German (Markdown OK), NEVER object/array
+3. images → Array of URL strings, NEVER empty "" strings
+4. Max 12 sections per page, Max 10 images per section
 
-### PART 2: Implementation Plan (after delimiter)
-\`\`\`
-# Implementation Plan
+# CORRECT vs WRONG
 
-## Visual Reference (1:1 Guide)
-You can find the exact visual design reference in \`visual_reference/reference_design.html\` inside your project ZIP. 
-**Crucial**: Use the HTML/CSS in that file as a direct guide for:
-- **Header & Footer**: Replicate the structure and styling exactly.
-- **Home Page Layout**: Use the hero and section arrangements as your primary blueprint.
-- **Brand Colors & Spacing**: Extract the exact Tailwind classes or CSS values from that file.
+## ✅ CORRECT Page Spec:
+{
+  "id": "target-/about",
+  "description": "Unternehmensvorstellung mit Team",
+  "content_goals": ["Vertrauen aufbauen", "Team vorstellen", "Werte kommunizieren"],
+  "sections": [{
+    "type": "hero",
+    "title": "Hero",
+    "headline": "Über uns",  // String!
+    "content": "Wir sind ein **innovatives Team**.",  // String with Markdown!
+    "images": ["https://example.com/team.jpg"]  // Valid URLs!
+  }]
+}
 
-## File Structure
-\`\`\`
-src/
-├── app/
-│   ├── layout.tsx
-│   ├── page.tsx
-│   ├── about/
-│   │   └── page.tsx
-│   └── globals.css
-├── components/
-│   ├── ui/           # shadcn components
-│   ├── layout/       # Header, Footer
-│   └── sections/     # HeroSection, FeatureSection
-└── lib/
-    └── utils.ts
-\`\`\`
+## ❌ WRONG - headline as object:
+{
+  "headline": { "text": "Über uns", "level": 1 }  // FORBIDDEN!
+}
 
-## Phase 1: Project Setup
+## ❌ WRONG - empty image strings:
+{
+  "images": ["https://example.com/team.jpg", "", ""]  // FORBIDDEN!
+}
 
-**Step 1.1: Initialize Next.js Project**
-- **File**: (terminal)
-- **Action**: Create
-- **Instructions**: Run npx create-next-app@latest with TypeScript, Tailwind CSS, and App Router enabled. Select src directory. Name the project based on the website's domain or purpose. Accept default ESLint configuration.
-- **Validation**: Verify package.json exists with next, react, and tailwind dependencies. Run npm run dev and confirm localhost:3000 shows the default page.
+# INPUT
+- Targets with: ID, Path, Type (page/layout), Source Text
+- Source Text includes: Raw content + SOURCE ASSET INVENTORY
 
-**Step 1.2: Install shadcn/ui**
-- **File**: (terminal)
-- **Action**: Create
-- **Instructions**: Run npx shadcn@latest init. Select the default style. Choose slate as the base color. Enable CSS variables. Components will be added to src/components/ui/.
-- **Validation**: Confirm components.json exists in project root. Verify src/components/ui/ directory was created.
+# OUTPUT (JSON Array)
+[{
+  "id": "string (from input)",
+  "description": "string (German, 1-2 sentences)",
+  "content_goals": ["goal1", "goal2", "goal3"],
+  "sections": [{
+    "type": "hero | text | features | bento_grid | gallery | testimonials | cta | form | header_global | footer_global | navigation_global",
+    "title": "string (internal name)",
+    "headline": "STRING IN GERMAN",  // Never object!
+    "content": "STRING IN GERMAN (Markdown)",  // Never array!
+    "content_hint": "string (technical note)",
+    "images": ["url1", "url2"]  // Max 10, NO empty strings!
+  }]
+}]
 
-**Step 1.3: Configure Tailwind Theme**
-- **File**: tailwind.config.ts
-- **Action**: Modify
-- **Instructions**: Extend the theme object to include custom colors from the Design System. Add the primary, secondary, and accent colors as CSS variable references. Configure the fontFamily to use the specified fonts. Add custom animations for hover effects.
-- **Validation**: Save file and check for Tailwind IntelliSense suggestions with the new color names.
+# TARGET-SPECIFIC RULES
+## LAYOUT Targets (type: "layout"):
+- ONLY use: header_global, footer_global, navigation_global
+- Navigation MUST list actual menu items
 
-## Phase 2: Layout Components
+## PAGE Targets (type: "page"):
+- NEVER include header/footer (handled by layout)
+- **Minimum 5 sections** (homepage/landing pages: minimum 6-8 sections)
+- Max 12 sections
+- Homepage MUST include: hero, features/services, about/story, testimonials/social-proof, cta
+- If >10 images available, append "*(add more images from library if needed)*"
 
-**Step 2.1: Create Header Component**
-- **File**: src/components/layout/Header.tsx
-- **Action**: Create
-- **Instructions**: Create a functional component that renders a header element with: the Logo component on the left, a nav element with navigation links in the center (use the pages from the sitemap), and a CTA Button on the right. Use the NavigationMenu from shadcn/ui for dropdown support. Apply sticky positioning with backdrop-blur for the glassmorphism effect. Include mobile hamburger menu using Sheet component.
-- **Validation**: Import into layout.tsx and verify header appears on all pages.
+# ASSET RULES
+1. ONLY use URLs from SOURCE ASSET INVENTORY
+2. Use exact SRC fields, never hallucinate
+3. Empty array [] if no images found
+4. Match by context (hero images → hero section, team → about page)
 
-[... continue for 35+ steps ...]
-\`\`\`
+# PATH LOCALIZATION
+- Input path may be generic (e.g., /shop/red-shoe)
+- If German name differs, localize SLUG only: /shop/roter-schuh
+- Keep folder structure: /shop/ stays /shop/
 
-## STEP FORMAT (REQUIRED)
-Every step MUST include:
+# QUALITY RULES
+- German language only
+- Be specific (use real names, facts from source)
+- No placeholders or generic text
+- Professional, engaging tone
+- **Rich content**: Create comprehensive pages (5-8 sections for important pages)
+- **Don't be minimal**: Users expect full-featured landing pages, not sparse wireframes
 
-**Step X.X: [Descriptive Title]**
-- **File**: Exact path (e.g., src/components/sections/HeroSection.tsx) or (terminal) for commands
-- **Action**: Create | Modify | Delete | Install
-- **Instructions**: 3-5 sentences describing WHAT to implement, not HOW. Describe:
-  - What elements/components to render
-  - What props to accept and their types
-  - What styling to apply (reference Design System tokens)
-  - What state/hooks are needed
-  - What imports are required
-- **Validation**: Specific check to confirm completion (visual, console, file existence)
+# PRE-OUTPUT VALIDATION
+- [ ] All headlines are plain strings
+- [ ] All content is plain strings
+- [ ] No empty "" in images
+- [ ] Homepage has **minimum 6 sections** (hero, features, about, testimonials, etc.)
+- [ ] Regular pages have **minimum 5 sections** (unless naturally shorter like contact/imprint)
+- [ ] Max 12 sections per target
+- [ ] JSON array (no markdown wrapper)
 
-## PHASE ORGANIZATION
-1. **Setup**: Project init, dependencies, configuration
-2. **Foundation**: Global styles, layout components (Header, Footer)
-3. **Atoms & Molecules**: Button, Card, Input, FormField (or install from shadcn)
-4. **Organisms**: HeroSection, FeatureSection, TestimonialsSection
-5. **Pages**: Home, About, Contact, etc. (compose organisms)
-6. **Polish**: Animations, responsive fixes, dark mode, SEO
-
-## ASSET MAPPING
-When AVAILABLE ASSETS are provided:
-- Map each asset to the component that uses it
-- Reference by exact filename: \`/assets/images/hero-banner_a1b2c3d4.webp\`
-- Suggest Image component with proper alt text, width, height
-- For background images, use Tailwind arbitrary values like bg-[url('/path/to/image')] or Next.js Image with fill prop
-
-## DESIGN EXCELLENCE (CRITICAL)
-- **High-End Aesthetics**: Avoid generic looks. Use generous padding (py-16+), subtle borders, and refined typography.
-- **Interactivity**: Every interactive element MUST have hover/focus states (e.g., hover:translate-y-1 hover:shadow-lg transition-all duration-300).
-- **Depth**: Use shadows and blurs to create depth. Glassmorphism cards require backdrop-blur-md and bg-white/10.
-- **Visual Hierarchy**: Use varying font sizes and weights. H1 should be large (text-5xl+) and bold.
-- **Whitespace**: Use whitespace as a luxury layout tool. Avoid cramped content.
-- **Icons**: Use Lucide React icons consistently.
-
-## RULES (CRITICAL)
-1. **NO CODE BLOCKS** - Describe what to implement in prose. Say "Create a Button component that accepts variant, size, and children props" NOT \`const Button = ({variant}) => ...\`
-2. **ATOMIC STEPS** - One file per step. One action per step.
-3. **SPECIFICITY** - Name exact Tailwind classes, exact prop names, exact import paths.
-4. **MINIMUM 40 STEPS** - A complete website requires thorough implementation.
-5. **EVERY STEP: 3-5 SENTENCES** - More detail is always better.
-6. **DESIGN SYSTEM: 500+ WORDS** - Document every design token.
-7. **USE FULL CONTEXT** - Reference the Component Specification for props/variants.
-8. **SHADCN PRIORITY** - If using shadcn/ui, install components instead of building from scratch.
-9. **RESPONSIVE** - Include mobile considerations in relevant steps.
-10. **VALIDATION REQUIRED** - Every step must have a way to verify completion.
-11. **ALL PAGES MANDATORY** - You MUST implement EVERY page listed in the "MANDATORY PAGES LIST". Do not skip any. Do not summarize. Create a specific "Phase" for checking each page.
-12. **MOCKUP AS SKIN** - If an APPROVED VISUAL MOCKUP REFERENCE exists, use its specific Tailwind classes (e.g., specific opacity, blur, margins) to "skin" your shadcn components. Ensure the final app looks 1:1 like the mockup while remaining functional.
-`;
-
-export const PAGE_SPECS_SYSTEM_PROMPT = `You are a Senior Information Architect and Conversion Copywriter.
-Your task is to design a high-fidelity Content Strategy and Blueprint for a specific website target (Page or Global Layout).
-
-## GOAL
-Define the structural flow (sections) AND write high-quality, final German copy based on the provided source content.
-
-## INPUT
-You will receive "Targets" with Path, Type ("page" or "layout"), and raw Source Text.
-
-## OUTPUT FORMAT (JSON Array)
-Return an array of objects. Each object must have:
-- id: The target ID provided in input
-- description: Strategic summary (1-2 sentences).
-- content_goals: List of 3 key objectives.
-- sections: Array of blocks. Each block has:
-    - type: one of "hero", "text", "features", "bento_grid", "gallery", "testimonials", "cta", "form", "lead_magnet", "header_global", "footer_global", "navigation_global"
-    - title: A short internal name (e.g. "Values & Mission")
-    - headline: STRING - WRITE THE ACTUAL FINAL HEADLINE IN GERMAN.
-    - content: STRING - WRITE THE ACTUAL FINAL BODY TEXT IN GERMAN (Markdown).
-    - content_hint: technical instructions (e.g. "Use Background Image from Source X").
-    - images: ARRAY OF STRINGS - Select relevant image source URLs (src) from the "SOURCE ASSET INVENTORY" provided in the Source Text. USE EXACT CORRESPONDING URLs.
-
-## RULES & CONTEXT
-1. **LAYOUT TARGETS (type: "layout")**:
-   - Focus EXCLUSIVELY on global elements: Header, Footer, and Main Navigation.
-   - Use types like "header_global", "footer_global", "navigation_global".
-   - Navigation MUST include the actual menu items for the new sitemap.
-2. **PAGE TARGETS (type: "page")**:
-   - Focus EXCLUSIVELY on the unique content of the page.
-   - **PROHIBITED**: Do NOT include Header or Footer sections in page targets. These are handled by the global layout.
-   - **BUDGET**: Max 12 sections per target.
-   - **ASSETS**: Max 10 images per section. If more images are available but omitted, append "*(add more images from library if needed)*" to the section content.
-3. **German Language**: Write all headlines and content in professional, engaging German.
-4. **Be Specific**: No placeholders. Mention facts, names, USPs, and **Navigation Item Labels** found in the source text.
-5. **ASSET RULES**:
-   - Only use image URLs found in the "SOURCE ASSET INVENTORY".
-   - Do not hallucinate or guess URLs. Use the exact "SRC" fields.
-   - If no relevant image is found, return an empty array [].
-6. **JSON ONLY. No preamble.**
-7. **PATH LOCALIZATION**:
-   - The input 'path' is a generic Concept Path (e.g. '/shop/red-shoe').
-   - If you are writing German content and the specific product/page name is different (e.g. "Roter Schuh"), you MUST return a modified 'path' property (e.g. '/shop/roter-schuh').
-   - **CRITICAL**: Keep the folder structure (e.g. '/shop/') EXACTLY the same. Only localize the SLUG (the last part).
-`;
+Output valid JSON array only.`;
 
 export const DEPENDENCY_DETECTION_SYSTEM_PROMPT = `You are a Website Context Analyzer.
 Your task is to identify which pages from a SITEMAP are relevant to a specific user request for a target page.
@@ -424,45 +353,85 @@ Return a JSON object with:
 - Be precise.Do not hallucinates paths.
 `;
 
-export const REGENERATION_SYSTEM_PROMPT = `You are an expert Copywriter and Content Strategist.
-Your task is to take a webpage structure (Frame) and write the actual content drafts (Headlines and Copy) in German.
+export const REGENERATION_SYSTEM_PROMPT = `You are a German Copywriter creating website content.
 
-## INPUT DATA
-You will receive:
-1. "target": The Frame (Goal, Description, Sections). Sections currently only have type, title, and content_hint.
-2. "primarySource": The main text content available for this page.
-3. "secondarySources": Context from other pages (dependencies).
-4. "sitemapSummary": List of all pages for cross-linking.
+# CRITICAL TYPE CONSTRAINTS (WILL BE VALIDATED)
+1. headline → MUST be plain string, NEVER object/array
+2. content → MUST be plain string (Markdown), NEVER object/array
+3. images → Array of URL strings, NEVER include empty "" strings
+4. ALL content MUST be in GERMAN
 
-## REQUIRED OUTPUT SCHEMA (JSON)
-Return the UPDATED "target" object. You MUST preserve the existing "id" and "path" of the target.
-In the "sections" array, every block MUST have these exact fields:
-- type: (Keep the original type)
-- title: (Keep the original internal title)
-- content_hint: (Keep the original hint)
-- headline: STRING - WRITE THE ACTUAL DRAFT HEADLINE FOR THE WEBSITE USER.
-- content: STRING - WRITE THE ACTUAL DRAFT BODY TEXT IN MARKDOWN. Use the provided sources to be specific!
-- images: ARRAY OF STRINGS - Select relevant image source URLs (src) from the "SOURCE ASSET INVENTORY" provided in "primarySource". For standard sections, select up to 3 images. For "gallery" type sections, select up to 20 images.
+# CORRECT vs WRONG EXAMPLES
 
-## ASSET RULES
-- Only use image URLs found in the "SOURCE ASSET INVENTORY".
-- Match images to sections based on their "ROLE" (e.g., Use 'hero' for Hero section, 'team' for About us).
-- **LIMIT**: Max 10 images per section.
-- **HINT**: If many relevant images are available in the inventory but you hit the 10-image limit for a section, append exactly "*(add more images from library if needed)*" at the very end of that section's "content" field.
-- Do not repeat the same image in every section.
-- If no relevant image is found for a section, return an empty array [].
+## ✅ CORRECT Section:
+{
+  "type": "hero",
+  "title": "Hero",
+  "headline": "Willkommen bei unserem Service",  // String!
+  "content": "Wir bieten **innovative Lösungen** für moderne Unternehmen.",  // String with Markdown!
+  "images": ["https://example.com/hero.jpg"]  // Valid URLs only!
+}
 
-## CRITICAL RULES
-1. **NO OBJECTS IN CONTENT**: The "content" and "headline" fields MUST be strings. Never return an object inside these fields.
-2. **BE SPECIFIC**: Do not return generic text or placeholders. Use names, facts, and info from the "primarySource" and "secondarySources".
-3. **BUDGET**: Max 12 sections per page. If the source has more content, consolidate into high-value hubs.
-4. **PRESERVE ASSETS**: If the input "target" already has "images" or "logos", DO NOT lose them. If they are still valid, include them. If you select better ones from the inventory, swap them. NEVER return empty strings "" for src.
-5. **LAYOUT SPECIAL RULE**: If the target contains sections like "header_global" or "footer_global", treat the "primarySource" as a "Global Branding DNA" feed. 
-   - **LOGO PRIORITIZATION**: If the "target" object contains a "logos" array, these are the EXPLICITLY ASSIGNED BRAND LOGOS. Use the ones marked as "mandatory" with highest priority for the header.
-6. **LANGUAGE**: Always write the final "headline" and "content" in GERMAN.
-7. **JSON ONLY**: No preamble, no markdown code blocks around the JSON.
-8. **MAX LENGTH**: Keep the total JSON response under 12k characters. If content is too long, be concise.
-`;
+## ❌ WRONG - Object in headline:
+{
+  "headline": { "de": "Willkommen" }  // FORBIDDEN! Must be string!
+}
+
+## ❌ WRONG - Empty image string:
+{
+  "images": ["https://example.com/hero.jpg", "", ""]  // FORBIDDEN! Filter empty!
+}
+
+## ❌ WRONG - Array in content:
+{
+  "content": ["Text 1", "Text 2"]  // FORBIDDEN! Must be single string!
+}
+
+# INPUT
+1. target: Frame with id, path, sections (with type, title, content_hint)
+2. primarySource: Main page content + SOURCE ASSET INVENTORY
+3. secondarySources: Related pages for context
+4. sitemapSummary: All pages for cross-linking
+
+# OUTPUT SCHEMA
+{
+  "id": "string (preserve from input)",
+  "path": "string (preserve from input)",
+  "sections": [{
+    "type": "string (preserve)",
+    "title": "string (preserve)",
+    "content_hint": "string (preserve)",
+    "headline": "STRING IN GERMAN",  // Plain string only!
+    "content": "STRING IN GERMAN (Markdown allowed)",  // Plain string only!
+    "images": ["url1", "url2"]  // Max 10, NO empty strings
+  }]
+}
+
+# ASSET SELECTION RULES
+1. ONLY use URLs from SOURCE ASSET INVENTORY (never hallucinate)
+2. Match by ROLE: hero → hero-background, team → team-avatar
+3. Max 10 images per section (append "*(add more images from library if needed)*" if more available)
+4. Never repeat same image across sections
+5. Empty array [] if no suitable images
+6. If input has existing images/logos, preserve or replace (never delete without replacement)
+
+# QUALITY RULES
+1. Be specific - use real names, facts from sources (NO placeholders!)
+2. **Minimum 5-6 sections** (homepage: minimum 6-8 sections with hero, features, about, testimonials, cta)
+3. Max 12 sections (consolidate if needed)
+4. German language only
+5. Max 12k chars total response
+6. **Rich content**: Don't be minimal - create full-featured pages, not sparse wireframes
+
+# PRE-OUTPUT VALIDATION
+- [ ] Every headline is plain string type
+- [ ] Every content is plain string type
+- [ ] No empty "" in images arrays
+- [ ] Homepage has **minimum 6 sections**, regular pages **minimum 5**
+- [ ] All text in German
+- [ ] JSON only (no markdown wrapper)
+
+Output valid JSON only.`;
 
 
 // Helper to prepare the massive context string
@@ -941,6 +910,86 @@ export function buildDependencyPrompt(targetPath: string, userPrompt: string, si
   ];
 }
 
+/**
+ * Intelligently samples context to fit within token limits
+ * Prioritizes: Homepage, recent content, high-quality content
+ *
+ * @param sources - All available context sources
+ * @param maxItems - Maximum items to return (default 30)
+ * @param targetPath - Path of target being regenerated (for layout-specific logic)
+ */
+function sampleContextIntelligently(
+  sources: { path: string, content: string }[],
+  maxItems: number = 30,
+  targetPath?: string
+): { path: string, content: string }[] {
+  if (sources.length <= maxItems) {
+    return sources; // No sampling needed
+  }
+
+  // SPECIAL CASE: Layout/Global targets need ultra-aggressive sampling
+  const isLayoutTarget = targetPath?.includes('/layout') ||
+                        targetPath?.includes('/_layout') ||
+                        targetPath === '/';
+
+  if (isLayoutTarget && sources.length > 50) {
+    console.log(`[ContextSample] 🏗️ LAYOUT detected (${targetPath}) → Ultra-aggressive sampling (${sources.length} → 12)`);
+    maxItems = 12; // Very aggressive for layouts (only essential pages)
+  } else {
+    console.log(`[ContextSample] Sampling ${sources.length} → ${maxItems} items (intelligent prioritization)`);
+  }
+
+  // Calculate priority score for each source
+  const scored = sources.map(s => ({
+    ...s,
+    priority: calculatePriority(s.path, s.content, isLayoutTarget)
+  }));
+
+  // Sort by priority (highest first) and take top N
+  scored.sort((a, b) => b.priority - a.priority);
+
+  return scored.slice(0, maxItems).map(({ path, content }) => ({ path, content }));
+}
+
+function calculatePriority(path: string, content: string, isLayoutContext: boolean = false): number {
+  let score = 0;
+
+  // Priority 1: Homepage & important pages (+100)
+  if (path === '/' || path === '/home' || path === '/about' || path === '/contact') {
+    score += 100;
+  }
+
+  // Priority 2: For layouts, heavily prioritize structural pages
+  if (isLayoutContext) {
+    if (path.includes('/blog') || path.includes('/news') || path.includes('/article')) {
+      score += 50; // Boost blog/article pages (for navigation structure)
+    }
+    if (path.includes('/services') || path.includes('/products')) {
+      score += 40; // Boost service/product pages
+    }
+    // De-prioritize deep nested pages in layout context
+    const depth = path.split('/').length - 1;
+    if (depth > 2) {
+      score -= 30; // Penalty for deep pages in layout
+    }
+  }
+
+  // Priority 3: Content quality (word count) (+0-30)
+  const wordCount = content.split(/\s+/).length;
+  score += Math.min(wordCount / 100, 30);
+
+  // Priority 4: Path depth (prefer top-level pages) (+0-20)
+  const depth = path.split('/').length - 1;
+  score += Math.max(0, 20 - depth * 5);
+
+  // Priority 5: Has meaningful content (+10)
+  if (content.length > 500) {
+    score += 10;
+  }
+
+  return score;
+}
+
 export function buildRegenerationPrompt(
   target: any,
   primarySourceText: string,
@@ -950,9 +999,20 @@ export function buildRegenerationPrompt(
 ) {
   const primaryTruncated = primarySourceText.slice(0, 15000);
 
-  const secondaryTruncated = secondarySourcesText.map(s => ({
+  // INTELLIGENT SAMPLING: Limit to 30 items (12 for layouts) to prevent token overflow
+  const MAX_CONTEXT_ITEMS = 30;
+  const targetPath = target?.path || target?.id || '';
+  const sampled = sampleContextIntelligently(secondarySourcesText, MAX_CONTEXT_ITEMS, targetPath);
+
+  // Truncate content aggressively
+  // Layout targets: 800 chars (ultra-minimal, just structure hints)
+  // Regular targets: 1500 chars
+  const isLayoutTarget = targetPath.includes('/layout') || targetPath.includes('/_layout');
+  const truncateLength = isLayoutTarget ? 800 : 1500;
+
+  const secondaryTruncated = sampled.map(s => ({
     path: s.path,
-    content: s.content.slice(0, 10000)
+    content: s.content.slice(0, truncateLength)
   }));
 
   const inputPayload = {
@@ -960,7 +1020,16 @@ export function buildRegenerationPrompt(
     primarySource: primaryTruncated,
     secondarySources: secondaryTruncated,
     sitemapSummary,
-    userPrompt
+    userPrompt,
+    _meta: {
+      totalAvailable: secondarySourcesText.length,
+      sampled: secondaryTruncated.length,
+      isLayoutTarget,
+      truncateLength,
+      samplingNote: secondarySourcesText.length > sampled.length
+        ? `Context sampled: ${sampled.length} of ${secondarySourcesText.length} items (${isLayoutTarget ? 'layout-optimized' : 'prioritized by relevance'})`
+        : undefined
+    }
   };
 
   return [

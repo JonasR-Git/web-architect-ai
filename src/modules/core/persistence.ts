@@ -1,8 +1,16 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { SiteStructure, StackConfig, DesignConfig } from '@/types';
+import {
+    saveCompressed,
+    loadCompressed,
+    saveWithDeduplication,
+    computeHash,
+    loadSessionSections
+} from './utils/storage-utils';
 
 const SESSIONS_DIR = path.join(process.cwd(), 'data', 'sessions');
+const USE_COMPRESSION = process.env.DISABLE_COMPRESSION !== 'true'; // Can be disabled via env var
 
 export type SessionData = {
     id: string;
@@ -77,10 +85,21 @@ async function processAndSaveAssets(data: SessionData): Promise<SessionData> {
 
             const ext = matches[1];
             const buffer = Buffer.from(matches[2], 'base64');
-            const filename = `${prefix}_${index}_${Date.now()}.${ext}`;
+
+            // Use content-based deduplication (SHA256)
+            const hash = computeHash(buffer);
+            const filename = `${prefix}_${hash.substring(0, 16)}.${ext}`;
             const filePath = path.join(assetsFolder, filename);
 
-            await fs.writeFile(filePath, buffer);
+            // Check if already exists (deduplication)
+            try {
+                await fs.access(filePath);
+                console.log(`[Persistence] Asset deduped: ${filename} (already exists)`);
+            } catch {
+                // Doesn't exist, save it
+                await fs.writeFile(filePath, buffer);
+                console.log(`[Persistence] Asset saved: ${filename} (${(buffer.length / 1024).toFixed(1)}KB)`);
+            }
 
             // Return asset with NEW local URL
             return {
@@ -141,7 +160,13 @@ export const PersistenceService = {
 
         try {
             await initDir(sessionFolder);
-            await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+
+            if (USE_COMPRESSION) {
+                const metrics = await saveCompressed(filePath, state);
+                console.log(`[Persistence] State saved (${(metrics.compressedSize / 1024).toFixed(1)}KB, ${(metrics.compressionRatio * 100).toFixed(0)}% of original)`);
+            } else {
+                await fs.writeFile(filePath, JSON.stringify(state, null, 2), 'utf-8');
+            }
             return true;
         } catch (error) {
             console.error('[Persistence] Failed to save state:', error);
@@ -155,7 +180,13 @@ export const PersistenceService = {
 
         try {
             await initDir(sessionFolder);
-            await fs.writeFile(filePath, JSON.stringify(structure, null, 2), 'utf-8');
+
+            if (USE_COMPRESSION) {
+                const metrics = await saveCompressed(filePath, structure);
+                console.log(`[Persistence] Structure saved (${(metrics.compressedSize / 1024).toFixed(1)}KB, ${(metrics.compressionRatio * 100).toFixed(0)}% of original)`);
+            } else {
+                await fs.writeFile(filePath, JSON.stringify(structure, null, 2), 'utf-8');
+            }
             return true;
         } catch (error) {
             console.error('[Persistence] Failed to save structure:', error);
@@ -169,7 +200,13 @@ export const PersistenceService = {
 
         try {
             await initDir(sessionFolder);
-            await fs.writeFile(filePath, JSON.stringify(migrationPlan, null, 2), 'utf-8');
+
+            if (USE_COMPRESSION) {
+                const metrics = await saveCompressed(filePath, migrationPlan);
+                console.log(`[Persistence] Migration saved (${(metrics.compressedSize / 1024).toFixed(1)}KB, ${(metrics.compressionRatio * 100).toFixed(0)}% of original)`);
+            } else {
+                await fs.writeFile(filePath, JSON.stringify(migrationPlan, null, 2), 'utf-8');
+            }
             return true;
         } catch (error) {
             console.error('[Persistence] Failed to save migration:', error);
@@ -183,7 +220,13 @@ export const PersistenceService = {
 
         try {
             await initDir(sessionFolder);
-            await fs.writeFile(filePath, JSON.stringify(specs, null, 2), 'utf-8');
+
+            if (USE_COMPRESSION) {
+                const metrics = await saveCompressed(filePath, specs);
+                console.log(`[Persistence] Specs saved (${(metrics.compressedSize / 1024).toFixed(1)}KB, ${(metrics.compressionRatio * 100).toFixed(0)}% of original)`);
+            } else {
+                await fs.writeFile(filePath, JSON.stringify(specs, null, 2), 'utf-8');
+            }
             return true;
         } catch (error) {
             console.error('[Persistence] Failed to save specs:', error);
@@ -197,7 +240,13 @@ export const PersistenceService = {
 
         try {
             await initDir(sessionFolder);
-            await fs.writeFile(filePath, JSON.stringify(design, null, 2), 'utf-8');
+
+            if (USE_COMPRESSION) {
+                const metrics = await saveCompressed(filePath, design);
+                console.log(`[Persistence] Design saved (${(metrics.compressedSize / 1024).toFixed(1)}KB, ${(metrics.compressionRatio * 100).toFixed(0)}% of original)`);
+            } else {
+                await fs.writeFile(filePath, JSON.stringify(design, null, 2), 'utf-8');
+            }
             return true;
         } catch (error) {
             console.error('[Persistence] Failed to save design:', error);
@@ -262,11 +311,12 @@ export const PersistenceService = {
                 optimizedContent: data.optimizedContent
             };
 
-            await fs.writeFile(
-                path.join(sessionFolder, 'meta.json'),
-                JSON.stringify(meta, null, 2),
-                'utf-8'
-            );
+            const metaPath = path.join(sessionFolder, 'meta.json');
+            if (USE_COMPRESSION) {
+                await saveCompressed(metaPath, meta);
+            } else {
+                await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+            }
 
             return cleanedData;
         } catch (error) {
@@ -289,36 +339,30 @@ export const PersistenceService = {
             const designPath = path.join(sessionFolder, 'design.json');
 
             try {
-                // Load all files in parallel for speed
-                const [metaContent, stateContent, structureContent, migrationContent, specsContent, designContent] = await Promise.all([
-                    fs.readFile(metaPath, 'utf-8').catch(() => null),
-                    fs.readFile(statePath, 'utf-8').catch(() => null),
-                    fs.readFile(structurePath, 'utf-8').catch(() => null),
-                    fs.readFile(migrationPath, 'utf-8').catch(() => null),
-                    fs.readFile(specsPath, 'utf-8').catch(() => null),
-                    fs.readFile(designPath, 'utf-8').catch(() => null)
+                // Load all files in parallel for speed - try compressed first
+                const [meta, state, structure, migration, specs, design] = await Promise.all([
+                    loadCompressed(metaPath),
+                    loadCompressed(statePath),
+                    loadCompressed(structurePath),
+                    loadCompressed(migrationPath),
+                    loadCompressed(specsPath),
+                    loadCompressed(designPath)
                 ]);
 
                 // If we have at least meta, we're using the new structure
-                if (metaContent) {
-                    console.log(`[Persistence] Loading session ${id} from granular structure`);
-                    const meta = JSON.parse(metaContent);
-                    const state = stateContent ? JSON.parse(stateContent) : {};
-                    const structure = structureContent ? JSON.parse(structureContent) : null;
-                    const migration = migrationContent ? JSON.parse(migrationContent) : null;
-                    const specs = specsContent ? JSON.parse(specsContent) : {};
-                    const design = designContent ? JSON.parse(designContent) : {};
+                if (meta) {
+                    console.log(`[Persistence] Loading session ${id} from granular structure (compressed: ${USE_COMPRESSION})`);
 
                     return {
                         ...meta,
-                        ...state,
-                        structure,
-                        migrationPlan: migration,
-                        pageSpecs: specs.pageSpecs || null,
-                        componentSpec: specs.componentSpec || null,
-                        finalOutput: specs.finalOutput || null,
-                        designConfig: design.designConfig,
-                        stackConfig: design.stackConfig
+                        ...(state || {}),
+                        structure: structure || null,
+                        migrationPlan: migration || null,
+                        pageSpecs: specs?.pageSpecs || null,
+                        componentSpec: specs?.componentSpec || null,
+                        finalOutput: specs?.finalOutput || null,
+                        designConfig: design?.designConfig,
+                        stackConfig: design?.stackConfig
                     } as SessionData;
                 }
             } catch (granularError) {
@@ -424,6 +468,105 @@ export const PersistenceService = {
         } catch (error) {
             console.error(`Failed to delete session ${id}`, error);
             return false;
+        }
+    },
+
+    /**
+     * PROGRESSIVE LOADING - Load only specific sections of a session
+     * Useful for faster initial loads - only fetch what's needed for current view
+     *
+     * @param id - Session ID
+     * @param sections - Array of sections to load
+     * @returns Partial session data
+     */
+    async loadSessionPartial(
+        id: string,
+        sections: Array<'meta' | 'state' | 'structure' | 'migration' | 'specs' | 'design'>
+    ): Promise<Partial<SessionData> | null> {
+        try {
+            console.log(`[Persistence] Progressive load: ${sections.join(', ')}`);
+
+            const data = await loadSessionSections(id, sections, SESSIONS_DIR);
+
+            if (data.meta) {
+                return {
+                    ...data.meta,
+                    ...(data.state || {}),
+                    structure: data.structure || null,
+                    migrationPlan: data.migration || null,
+                    pageSpecs: data.specs?.pageSpecs || null,
+                    componentSpec: data.specs?.componentSpec || null,
+                    finalOutput: data.specs?.finalOutput || null,
+                    designConfig: data.design?.designConfig,
+                    stackConfig: data.design?.stackConfig
+                } as Partial<SessionData>;
+            }
+
+            return null;
+        } catch (error) {
+            console.error(`[Persistence] Progressive load failed for ${id}:`, error);
+            return null;
+        }
+    },
+
+    /**
+     * Gets compression statistics for all sessions
+     */
+    async getCompressionStats(): Promise<{
+        totalSessions: number;
+        totalOriginalSizeKB: number;
+        totalCompressedSizeKB: number;
+        compressionRatio: number;
+        savingsPercent: number;
+    }> {
+        try {
+            await initDir();
+            const entries = await fs.readdir(SESSIONS_DIR, { withFileTypes: true });
+
+            let totalOriginal = 0;
+            let totalCompressed = 0;
+
+            for (const entry of entries) {
+                if (entry.isDirectory()) {
+                    const sessionFolder = path.join(SESSIONS_DIR, entry.name);
+                    const files = await fs.readdir(sessionFolder);
+
+                    for (const file of files) {
+                        const filePath = path.join(sessionFolder, file);
+                        const stats = await fs.stat(filePath);
+
+                        if (file.endsWith('.gz')) {
+                            totalCompressed += stats.size;
+                            // Estimate original size as 3.3x compressed (typical for JSON)
+                            totalOriginal += stats.size * 3.3;
+                        } else if (file.endsWith('.json')) {
+                            // Uncompressed file
+                            totalOriginal += stats.size;
+                            totalCompressed += stats.size;
+                        }
+                    }
+                }
+            }
+
+            const compressionRatio = totalOriginal > 0 ? totalCompressed / totalOriginal : 1;
+            const savingsPercent = totalOriginal > 0 ? (1 - compressionRatio) * 100 : 0;
+
+            return {
+                totalSessions: entries.filter(e => e.isDirectory()).length,
+                totalOriginalSizeKB: totalOriginal / 1024,
+                totalCompressedSizeKB: totalCompressed / 1024,
+                compressionRatio,
+                savingsPercent
+            };
+        } catch (error) {
+            console.error('[Persistence] Failed to get compression stats:', error);
+            return {
+                totalSessions: 0,
+                totalOriginalSizeKB: 0,
+                totalCompressedSizeKB: 0,
+                compressionRatio: 1,
+                savingsPercent: 0
+            };
         }
     }
 };

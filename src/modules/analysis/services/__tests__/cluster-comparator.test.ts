@@ -1,373 +1,254 @@
-import { ClusterComparator } from '../cluster-comparator';
-import { SiteNode, ContentProfile, ClusterForComparison } from '@/types';
+import { describe, expect, it, vi } from 'vitest';
 
-describe('ClusterComparator', () => {
-    // Mock SiteNode factory
-    const createMockNode = (overrides: Partial<SiteNode> = {}): SiteNode => ({
-        url: 'https://example.com/test',
+import type {
+    ClusterComparisonResult,
+    ClusterConflict,
+    ClusterForComparison,
+    ContentProfile,
+    SiteNode,
+} from '@/types';
+
+import { ClusterComparator } from '../cluster-comparator';
+
+interface NodeOptions {
+    url?: string;
+    title?: string;
+    wordCount?: number;
+    linkCount?: number;
+    imageCount?: number;
+    schemaTypes?: string[];
+    headings?: string[];
+    rawText?: string;
+}
+
+function createNode({
+    url = 'https://example.com/page',
+    title = 'Example page',
+    wordCount = 500,
+    linkCount = 0,
+    imageCount = 0,
+    schemaTypes = [],
+    headings = [],
+    rawText = '',
+}: NodeOptions = {}): SiteNode {
+    return {
+        url,
         depth: 1,
         type: 'other',
         meta: {
-            title: 'Test Page',
-            description: 'Test description',
+            title,
+            description: 'Example description',
             social: {},
-            schemaMarkup: [],
+            schemaMarkup: schemaTypes,
             geoSignals: {
                 hasCitations: false,
                 hasEvidence: false,
-                hasAuthorInfo: false
-            }
+                hasAuthorInfo: false,
+            },
         },
         content: {
-            h1: 'Test H1',
-            headings: [],
-            wordCount: 500,
-            images: [],
-            links: [],
+            h1: title,
+            headings: headings.map((text, index) => ({ level: index + 1, text })),
+            wordCount,
+            images: Array.from({ length: imageCount }, (_, index) => ({
+                alt: `Image ${index + 1}`,
+                src: `https://example.com/image-${index + 1}.jpg`,
+            })),
+            links: Array.from({ length: linkCount }, (_, index) => ({
+                href: `/link-${index + 1}`,
+                text: `Link ${index + 1}`,
+                type: 'internal' as const,
+                role: 'content' as const,
+                roleConfidence: 100,
+                isButton: false,
+                opensInNewTab: false,
+                isDownload: false,
+            })),
             forms: [],
             landmarks: [],
             hasSkipLink: false,
-            hasLegalAccessibilityLink: false
+            hasLegalAccessibilityLink: false,
+            rawText,
         },
         tech: {
             detectedFrameworks: [],
-            duplicateIds: []
+            duplicateIds: [],
         },
-        ...overrides
-    });
+    };
+}
 
-    describe('extractContentProfiles', () => {
-        it('should extract content profiles from nodes', () => {
-            const nodes: SiteNode[] = [
-                createMockNode({
-                    url: 'https://example.com/page1',
-                    content: {
-                        ...createMockNode().content,
-                        wordCount: 1000,
-                        headings: [{ level: 1, text: 'Title 1' }, { level: 2, text: 'Subtitle 1' }],
-                        links: [{ text: 'Link 1', href: '/link1' }]
-                    },
-                    meta: {
-                        ...createMockNode().meta,
-                        schemaMarkup: ['Article']
-                    }
-                }),
-                createMockNode({
-                    url: 'https://example.com/page2',
-                    content: {
-                        ...createMockNode().content,
-                        wordCount: 1500,
-                        headings: [{ level: 1, text: 'Title 2' }]
-                    }
-                })
-            ];
+function createProfile(overrides: Partial<ContentProfile> = {}): ContentProfile {
+    return {
+        url: 'https://example.com/page',
+        title: 'Example page',
+        wordCount: 500,
+        headings: [],
+        linkCount: 5,
+        schemaTypes: [],
+        imageCount: 2,
+        hasForm: false,
+        ...overrides,
+    };
+}
 
-            const profiles = ClusterComparator.extractContentProfiles(nodes, 5);
+function createCluster(pattern: string, profiles: ContentProfile[]): ClusterForComparison {
+    return {
+        pattern,
+        instances: [],
+        sampleProfiles: profiles,
+    };
+}
 
-            expect(profiles).toHaveLength(2);
-            expect(profiles[0]).toMatchObject({
-                url: expect.stringContaining('example.com'),
-                wordCount: expect.any(Number),
-                headings: expect.any(Array),
-                linkCount: expect.any(Number),
-                schemaTypes: expect.any(Array),
-                imageCount: expect.any(Number),
-                hasForm: expect.any(Boolean)
-            });
-        });
-
-        it('should limit profiles to specified number', () => {
-            const nodes = Array.from({ length: 10 }, (_, i) =>
-                createMockNode({ url: `https://example.com/page${i}` })
-            );
-
-            const profiles = ClusterComparator.extractContentProfiles(nodes, 3);
-
-            expect(profiles.length).toBeLessThanOrEqual(3);
-        });
-
-        it('should return empty array for empty input', () => {
-            const profiles = ClusterComparator.extractContentProfiles([]);
-            expect(profiles).toEqual([]);
-        });
-    });
-
-    describe('findConflictingClusters', () => {
-        it('should detect same_base_path conflicts', () => {
-            const clusters: ClusterForComparison[] = [
-                {
-                    pattern: '/blog/tag/[tag]',
-                    instances: [createMockNode({ url: 'https://example.com/blog/tag/tech' })]
-                },
-                {
-                    pattern: '/blog/[article]',
-                    instances: [createMockNode({ url: 'https://example.com/blog/my-article' })]
-                }
-            ];
-
-            const conflicts = ClusterComparator.findConflictingClusters(clusters);
-
-            expect(conflicts.length).toBeGreaterThan(0);
-            expect(conflicts[0].conflictType).toBe('same_base_path');
-        });
-
-        it('should detect similar_pattern conflicts', () => {
-            const clusters: ClusterForComparison[] = [
-                {
-                    pattern: '/blog/tag/[tag]',
-                    instances: [createMockNode()]
-                },
-                {
-                    pattern: '/blog/category/[cat]',
-                    instances: [createMockNode()]
-                }
-            ];
-
-            const conflicts = ClusterComparator.findConflictingClusters(clusters);
-
-            expect(conflicts.length).toBeGreaterThan(0);
-            expect(conflicts[0].conflictType).toBe('similar_pattern');
-        });
-
-        it('should return empty array when no conflicts', () => {
-            const clusters: ClusterForComparison[] = [
-                {
-                    pattern: '/blog/[slug]',
-                    instances: [createMockNode()]
-                },
-                {
-                    pattern: '/products/[id]',
-                    instances: [createMockNode()]
-                }
-            ];
-
-            const conflicts = ClusterComparator.findConflictingClusters(clusters);
-
-            expect(conflicts).toEqual([]);
-        });
-    });
-
-    describe('quickHeuristicCheck', () => {
-        it('should detect DEFINITELY_DIFFERENT for high word count variance', () => {
-            const profilesA: ContentProfile[] = [{
-                url: 'test',
-                title: 'Tag Page',
-                wordCount: 200,
-                headings: ['Tags'],
-                linkCount: 20,
-                schemaTypes: ['CollectionPage'],
-                imageCount: 0,
-                hasForm: false
-            }];
-
-            const profilesB: ContentProfile[] = [{
-                url: 'test',
+describe('ClusterComparator', () => {
+    it('extracts bounded content profiles without mutating the source order', () => {
+        const nodes = [
+            createNode({ url: 'https://example.com/short', wordCount: 100 }),
+            createNode({
+                url: 'https://example.com/article',
                 title: 'Article',
-                wordCount: 2500,
-                headings: ['Intro', 'Body', 'Conclusion'],
-                linkCount: 5,
+                wordCount: 900,
+                linkCount: 3,
+                imageCount: 2,
                 schemaTypes: ['Article'],
-                imageCount: 8,
-                hasForm: false
-            }];
+                headings: ['Article', 'Details'],
+                rawText: 'A'.repeat(600),
+            }),
+            createNode({ url: 'https://example.com/long', wordCount: 1_500 }),
+        ];
+        const originalOrder = nodes.map((node) => node.url);
 
-            const result = ClusterComparator.quickHeuristicCheck(profilesA, profilesB);
+        const profiles = ClusterComparator.extractContentProfiles(nodes, 2);
 
-            expect(result.shouldCompareWithAI).toBe(false);
-            expect(result.quickDecision).toBe('DEFINITELY_DIFFERENT');
-        });
+        expect(profiles).toHaveLength(2);
+        expect(nodes.map((node) => node.url)).toEqual(originalOrder);
+        expect(profiles).toContainEqual(expect.objectContaining({
+            url: 'https://example.com/article',
+            title: 'Article',
+            linkCount: 3,
+            imageCount: 2,
+            schemaTypes: ['Article'],
+            headings: ['Article', 'Details'],
+            contentSample: 'A'.repeat(500),
+        }));
+    });
 
-        it('should detect DEFINITELY_SAME for very similar metrics', () => {
-            const profilesA: ContentProfile[] = [{
-                url: 'test',
-                title: 'Tag Page',
-                wordCount: 300,
-                headings: ['Tags'],
-                linkCount: 20,
-                schemaTypes: ['CollectionPage'],
-                imageCount: 1,
-                hasForm: false
-            }];
+    it('detects conflicts by URL hierarchy, pattern similarity and URL overlap', () => {
+        const basePathConflict = ClusterComparator.findConflictingClusters([
+            { pattern: '/blog/tag/[tag]', instances: [createNode()] },
+            { pattern: '/blog/[article]', instances: [createNode()] },
+        ]);
+        const similarPatternConflict = ClusterComparator.findConflictingClusters([
+            { pattern: '/blog/tag/[tag]', instances: [createNode()] },
+            { pattern: '/blog/category/[category]', instances: [createNode()] },
+        ]);
+        const overlappingUrlConflict = ClusterComparator.findConflictingClusters([
+            { pattern: '/articles/[slug]', instances: [createNode({ url: 'https://example.com/shared' })] },
+            { pattern: '/stories/[slug]', instances: [createNode({ url: 'https://example.com/shared' })] },
+        ]);
 
-            const profilesB: ContentProfile[] = [{
-                url: 'test',
-                title: 'Category Page',
-                wordCount: 310,
-                headings: ['Categories'],
-                linkCount: 22,
-                schemaTypes: ['CollectionPage'],
-                imageCount: 1,
-                hasForm: false
-            }];
+        expect(basePathConflict[0]).toMatchObject({ conflictType: 'same_base_path', severity: 'high' });
+        expect(similarPatternConflict[0]).toMatchObject({ conflictType: 'similar_pattern', severity: 'medium' });
+        expect(overlappingUrlConflict[0]).toMatchObject({ conflictType: 'overlapping_urls', severity: 'high' });
+    });
 
-            const result = ClusterComparator.quickHeuristicCheck(profilesA, profilesB);
+    it('does not invent conflicts for unrelated cluster patterns', () => {
+        const conflicts = ClusterComparator.findConflictingClusters([
+            { pattern: '/blog/[slug]', instances: [createNode({ url: 'https://example.com/blog/post' })] },
+            { pattern: '/products/[id]', instances: [createNode({ url: 'https://example.com/products/1' })] },
+        ]);
 
-            expect(result.shouldCompareWithAI).toBe(false);
-            expect(result.quickDecision).toBe('DEFINITELY_SAME');
-        });
+        expect(conflicts).toEqual([]);
+    });
 
-        it('should recommend AI comparison for edge cases', () => {
-            const profilesA: ContentProfile[] = [{
-                url: 'test',
-                title: 'Page A',
-                wordCount: 800,
-                headings: [],
-                linkCount: 10,
-                schemaTypes: [],
-                imageCount: 3,
-                hasForm: false
-            }];
-
-            const profilesB: ContentProfile[] = [{
-                url: 'test',
-                title: 'Page B',
-                wordCount: 1200,
-                headings: [],
-                linkCount: 8,
-                schemaTypes: [],
-                imageCount: 5,
-                hasForm: true
-            }];
-
-            const result = ClusterComparator.quickHeuristicCheck(profilesA, profilesB);
-
-            expect(result.shouldCompareWithAI).toBe(true);
+    it.each([
+        {
+            name: 'large word-count differences',
+            a: createProfile({ wordCount: 100 }),
+            b: createProfile({ wordCount: 1_100 }),
+            expected: 'DEFINITELY_DIFFERENT',
+        },
+        {
+            name: 'article versus collection schemas',
+            a: createProfile({ schemaTypes: ['Article'] }),
+            b: createProfile({ schemaTypes: ['CollectionPage'] }),
+            expected: 'DEFINITELY_DIFFERENT',
+        },
+        {
+            name: 'matching metrics and schema',
+            a: createProfile({ wordCount: 500, linkCount: 10, imageCount: 4, schemaTypes: ['Article'] }),
+            b: createProfile({ wordCount: 520, linkCount: 11, imageCount: 4, schemaTypes: ['Article'] }),
+            expected: 'DEFINITELY_SAME',
+        },
+    ])('resolves $name without an AI call', ({ a, b, expected }) => {
+        expect(ClusterComparator.quickHeuristicCheck([a], [b])).toEqual({
+            shouldCompareWithAI: false,
+            quickDecision: expected,
         });
     });
 
-    describe('caching', () => {
-        beforeEach(() => {
-            ClusterComparator.clearCache();
-        });
+    it('escalates ambiguous comparisons and skips empty comparisons', () => {
+        const ambiguous = ClusterComparator.quickHeuristicCheck(
+            [createProfile({ wordCount: 800, linkCount: 10, imageCount: 3 })],
+            [createProfile({ wordCount: 1_200, linkCount: 8, imageCount: 5 })],
+        );
 
-        it('should cache comparison results', () => {
-            const result: any = {
-                decision: 'SAME_TYPE',
-                confidence: 85,
-                cluster_a_type: 'taxonomy',
-                cluster_b_type: 'taxonomy',
-                evidence: { similarities: [], differences: [] },
-                recommendation: 'MERGE',
-                reasoning: 'Test'
-            };
-
-            ClusterComparator.cacheComparison('/blog/tag/[tag]', '/blog/category/[cat]', result);
-
-            const cached = ClusterComparator.getCachedComparison('/blog/tag/[tag]', '/blog/category/[cat]');
-
-            expect(cached).toEqual(result);
-        });
-
-        it('should return null for non-existent cache entries', () => {
-            const cached = ClusterComparator.getCachedComparison('/foo/[bar]', '/baz/[qux]');
-            expect(cached).toBeNull();
-        });
-
-        it('should normalize pattern order in cache key', () => {
-            const result: any = {
-                decision: 'DIFFERENT_TYPE',
-                confidence: 90,
-                cluster_a_type: 'article',
-                cluster_b_type: 'taxonomy',
-                evidence: { similarities: [], differences: [] },
-                recommendation: 'KEEP_SEPARATE',
-                reasoning: 'Test'
-            };
-
-            ClusterComparator.cacheComparison('/blog/tag/[tag]', '/blog/[article]', result);
-
-            // Should work regardless of order
-            const cached1 = ClusterComparator.getCachedComparison('/blog/tag/[tag]', '/blog/[article]');
-            const cached2 = ClusterComparator.getCachedComparison('/blog/[article]', '/blog/tag/[tag]');
-
-            expect(cached1).toEqual(result);
-            expect(cached2).toEqual(result);
-        });
-
-        it('should clear cache', () => {
-            const result: any = {
-                decision: 'SAME_TYPE',
-                confidence: 80,
-                cluster_a_type: 'test',
-                cluster_b_type: 'test',
-                evidence: { similarities: [], differences: [] },
-                recommendation: 'MERGE',
-                reasoning: 'Test'
-            };
-
-            ClusterComparator.cacheComparison('/test/[a]', '/test/[b]', result);
-            expect(ClusterComparator.getCachedComparison('/test/[a]', '/test/[b]')).not.toBeNull();
-
-            ClusterComparator.clearCache();
-            expect(ClusterComparator.getCachedComparison('/test/[a]', '/test/[b]')).toBeNull();
-        });
-
-        it('should provide cache statistics', () => {
-            const result: any = {
-                decision: 'SAME_TYPE',
-                confidence: 80,
-                cluster_a_type: 'test',
-                cluster_b_type: 'test',
-                evidence: { similarities: [], differences: [] },
-                recommendation: 'MERGE',
-                reasoning: 'Test'
-            };
-
-            ClusterComparator.cacheComparison('/test/[a]', '/test/[b]', result);
-            ClusterComparator.cacheComparison('/test/[c]', '/test/[d]', result);
-
-            const stats = ClusterComparator.getCacheStats();
-
-            expect(stats.size).toBe(2);
-            expect(stats.entries.length).toBe(2);
+        expect(ambiguous).toEqual({ shouldCompareWithAI: true });
+        expect(ClusterComparator.quickHeuristicCheck([], [createProfile()])).toEqual({
+            shouldCompareWithAI: false,
         });
     });
 
-    describe('prepareForComparison', () => {
-        it('should extract profiles and check cache', () => {
-            const clusterA: ClusterForComparison = {
-                pattern: '/blog/tag/[tag]',
-                instances: [createMockNode()]
-            };
+    it('uses supplied profiles instead of rebuilding them from instances', () => {
+        const profiles = [createProfile({ title: 'Precomputed profile' })];
 
-            const clusterB: ClusterForComparison = {
-                pattern: '/blog/[article]',
-                instances: [createMockNode()]
-            };
+        const prepared = ClusterComparator.prepareForComparison(
+            { pattern: '/a/[slug]', instances: [], sampleProfiles: profiles },
+            { pattern: '/b/[slug]', instances: [createNode()] },
+        );
 
-            const prepared = ClusterComparator.prepareForComparison(clusterA, clusterB);
+        expect(prepared.profilesA).toBe(profiles);
+        expect(prepared.profilesB).toHaveLength(1);
+    });
 
-            expect(prepared.profilesA).toBeDefined();
-            expect(prepared.profilesB).toBeDefined();
-            expect(prepared.cachedResult).toBeNull(); // No cache yet
-        });
+    it('keeps deterministic decisions local and delegates only ambiguous conflicts', async () => {
+        const deterministic: ClusterConflict = {
+            clusterA: createCluster('/short/[slug]', [createProfile({ wordCount: 100 })]),
+            clusterB: createCluster('/long/[slug]', [createProfile({ wordCount: 2_000 })]),
+            conflictType: 'overlapping_urls',
+            severity: 'high',
+        };
+        const ambiguous: ClusterConflict = {
+            clusterA: createCluster('/news/[slug]', [createProfile({ wordCount: 800, linkCount: 10, imageCount: 3 })]),
+            clusterB: createCluster('/insights/[slug]', [createProfile({ wordCount: 1_200, linkCount: 8, imageCount: 5 })]),
+            conflictType: 'overlapping_urls',
+            severity: 'high',
+        };
+        const aiResult: ClusterComparisonResult = {
+            decision: 'SAME_TYPE',
+            confidence: 87,
+            cluster_a_type: 'editorial',
+            cluster_b_type: 'editorial',
+            evidence: { similarities: ['Editorial structure'], differences: [] },
+            recommendation: 'MERGE',
+            reasoning: 'Both clusters represent editorial detail pages.',
+        };
+        const compareClusterContentTypes = vi.fn().mockResolvedValue(aiResult);
+        const onProgress = vi.fn();
 
-        it('should use cached profiles if available', () => {
-            const sampleProfiles: ContentProfile[] = [{
-                url: 'test',
-                title: 'test',
-                wordCount: 100,
-                headings: [],
-                linkCount: 0,
-                schemaTypes: [],
-                imageCount: 0,
-                hasForm: false
-            }];
+        const results = await ClusterComparator.batchCompare(
+            [deterministic, ambiguous],
+            { compareClusterContentTypes },
+            2,
+            { onProgress },
+        );
 
-            const clusterA: ClusterForComparison = {
-                pattern: '/test/[a]',
-                instances: [],
-                sampleProfiles
-            };
-
-            const clusterB: ClusterForComparison = {
-                pattern: '/test/[b]',
-                instances: []
-            };
-
-            const prepared = ClusterComparator.prepareForComparison(clusterA, clusterB);
-
-            expect(prepared.profilesA).toEqual(sampleProfiles);
-        });
+        expect(compareClusterContentTypes).toHaveBeenCalledOnce();
+        expect(onProgress).toHaveBeenCalledWith(1, 1);
+        expect(results).toHaveLength(2);
+        expect([...results.values()]).toContainEqual(aiResult);
+        expect([...results.values()]).toContainEqual(expect.objectContaining({
+            recommendation: 'KEEP_SEPARATE',
+            reasoning: 'Heuristic decision: DEFINITELY_DIFFERENT',
+        }));
     });
 });

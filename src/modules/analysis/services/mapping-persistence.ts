@@ -1,4 +1,5 @@
 import { TargetSlot, MigrationPlan } from '@/types';
+import { normalizePatternMappingAction } from '@/modules/analysis/utils/mapping-actions';
 import { ID_PREFIXES } from '@/modules/core/constants/ids';
 
 export interface MappingPersistenceResult {
@@ -27,7 +28,7 @@ export function saveMappingChanges(
         newPatternMapping.push({
           pattern: sId,
           target_base: t.path,
-          action: t.action,
+          action: normalizePatternMappingAction(t.action),
           type: t.type,
           reason: `Cluster with ${cluster.instances?.length || 0} pages`,
           description: t.description,

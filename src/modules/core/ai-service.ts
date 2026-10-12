@@ -19,6 +19,7 @@ const Prompts = {
 import JSON5 from 'json5';
 import { jsonrepair } from 'jsonrepair';
 import { SiteStructure, StackConfig, DesignConfig, MockupSiteData, MigrationPlan, ClusterOverrides, ComponentSpecification } from '@/types';
+import { normalizeMappingAction, normalizePatternMappingAction } from '@/modules/analysis/utils/mapping-actions';
 
 // Simple token estimation (~4 chars per token for English)
 function estimateTokens(text: string): number {
@@ -840,6 +841,8 @@ export class AIService {
         // VALIDATION 2: Ensure all pattern targets have [slug] or [item]
         if (plan.pattern_mapping && Array.isArray(plan.pattern_mapping)) {
             plan.pattern_mapping = plan.pattern_mapping.map((pm: any) => {
+                pm.action = normalizePatternMappingAction(pm.action);
+
                 // If pattern contains dynamic segment but target doesn't
                 if ((pm.pattern.includes('[item]') || pm.pattern.includes('[slug]')) &&
                     !pm.target_base.includes('[') &&
@@ -858,6 +861,8 @@ export class AIService {
         // VALIDATION 3: Remove trailing slashes from page_mapping (except root /)
         if (plan.page_mapping && Array.isArray(plan.page_mapping)) {
             plan.page_mapping = plan.page_mapping.map((pm: any) => {
+                pm.action = normalizeMappingAction(pm.action);
+
                 if (pm.new_path && pm.new_path !== '/' && pm.new_path.endsWith('/')) {
                     pm.new_path = pm.new_path.replace(/\/$/, '');
                 }
@@ -890,7 +895,7 @@ export class AIService {
                     patternMap.set(key, {
                         pattern: pm.old_url,
                         target_base: targetBase,
-                        action: pm.action || 'redirect',
+                        action: normalizePatternMappingAction(pm.action),
                         type: pm.type || 'page',
                         reason: pm.reason || 'Auto-generated from page_mapping'
                     });

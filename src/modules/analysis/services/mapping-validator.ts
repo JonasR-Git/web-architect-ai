@@ -164,6 +164,7 @@ export class MappingValidator {
         // Build lookup of existing target paths (normalized)
         const targetByPath = new Map<string, TargetSlot>();
         existingTargets.forEach(t => {
+            if (t.action === 'delete') return;
             const normalized = t.path.replace(/\/$/, '').toLowerCase() || '/';
             targetByPath.set(normalized, t);
         });
@@ -189,11 +190,11 @@ export class MappingValidator {
 
             // Check if an existing target already covers this path
             const existingTarget = targetByPath.get(normalizedPath);
-            if (existingTarget) {
+            if (existingTarget && existingTarget.action !== 'delete') {
                 return {
                     sourceId: source.id,
                     suggestedPath: existingTarget.path,
-                    action: existingTarget.action as 'keep' | 'redirect' | 'merge',
+                    action: existingTarget.action,
                     reason: `Assigned to existing target ${existingTarget.path}`,
                     existingTargetId: existingTarget.id
                 };
@@ -201,7 +202,7 @@ export class MappingValidator {
 
             // Check for similar targets (high path similarity)
             const similarTarget = existingTargets.find(t =>
-                this.pathSimilarity(naturalPath, t.path) > 0.8
+                t.action !== 'delete' && this.pathSimilarity(naturalPath, t.path) > 0.8
             );
             if (similarTarget) {
                 return {
@@ -214,7 +215,7 @@ export class MappingValidator {
             }
 
             // No match found — create a new target
-            let action: 'keep' | 'redirect' | 'merge' = 'keep';
+            const action = 'keep' as const;
             let reason = `Auto-mapped from ${source.url}`;
 
             if (source.type === 'cluster') {
@@ -234,7 +235,7 @@ export class MappingValidator {
      * Finds duplicate targets (sources mapped to multiple targets)
      */
     private static findDuplicateTargets(targets: TargetSlot[]): DuplicateTarget[] {
-        const sourceIdToTargets = new Map<string, string[]>();
+        const sourceIdToTargets = new Map<string, TargetSlot[]>();
 
         // Build map of sourceId -> targetIds
         targets.forEach(target => {
@@ -242,22 +243,25 @@ export class MappingValidator {
                 if (!sourceIdToTargets.has(sourceId)) {
                     sourceIdToTargets.set(sourceId, []);
                 }
-                sourceIdToTargets.get(sourceId)!.push(target.id);
+                sourceIdToTargets.get(sourceId)!.push(target);
             });
         });
 
         // Find duplicates
         const duplicates: DuplicateTarget[] = [];
-        sourceIdToTargets.forEach((targetIds, sourceId) => {
-            if (targetIds.length > 1) {
+        sourceIdToTargets.forEach((sourceTargets, sourceId) => {
+            const isIntentionalSplit = sourceTargets.length > 1
+                && sourceTargets.every(target => target.action === 'split');
+
+            if (sourceTargets.length > 1 && !isIntentionalSplit) {
                 // Get first target for reporting
-                const firstTarget = targets.find(t => t.id === targetIds[0]);
+                const firstTarget = sourceTargets[0];
                 if (firstTarget) {
                     duplicates.push({
                         targetId: firstTarget.id,
                         targetPath: firstTarget.path,
                         sourceIds: [sourceId],
-                        duplicateCount: targetIds.length
+                        duplicateCount: sourceTargets.length
                     });
                 }
             }

@@ -104,6 +104,7 @@ export const MIGRATION_SYSTEM_PROMPT = `You are a Senior System Architect modern
 6. Multi-language: All variants map to ONE pattern (/de/blog + /en/blog → /blog/[slug])
 7. Clusters are atomic - map ENTIRE pattern, never split
 8. Prefer hierarchical depth over flat structure
+9. Use \`split\` only for a unique page whose content is intentionally distributed across multiple destination pages; emit one page_mapping entry per destination
 
 # OUTPUT SCHEMA
 {
@@ -116,7 +117,7 @@ export const MIGRATION_SYSTEM_PROMPT = `You are a Senior System Architect modern
   "page_mapping": [{
     "old_url": "string (ONLY unique pages)",
     "new_path": "string (NO trailing slash)",
-    "action": "keep" | "merge" | "redirect" | "delete",
+    "action": "keep" | "merge" | "split" | "redirect" | "delete",
     "type": "page" | "layout",
     "reason": "string (German)"
   }],

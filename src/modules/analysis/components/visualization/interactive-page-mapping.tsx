@@ -4,22 +4,18 @@ import { useState, useMemo, useCallback, useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import {
     ArrowRight, Check, Merge, Trash2, CornerDownRight, AlertCircle,
-    Edit2, Save, X, Plus, RotateCcw, GripVertical, Download
+    Edit2, Save, X, Plus, RotateCcw, GripVertical, Download, GitFork
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import type { MappingAction, PageMapping } from '@/types';
+import { MAPPING_ACTIONS } from '@/modules/analysis/utils/mapping-actions';
 
 // ============================================================================
 // TYPES
 // ============================================================================
 
-export interface PageMapping {
-    old_url: string;
-    new_path: string;
-    action: 'keep' | 'merge' | 'redirect' | 'delete';
-    reason?: string;
-    merged_with?: string | null;
-}
+export type { PageMapping } from '@/types';
 
 interface InteractivePageMappingTableProps {
     mapping: PageMapping[];
@@ -59,6 +55,15 @@ const actionConfig = {
         badgeColor: 'bg-blue-500/20 text-blue-400',
         hoverBg: 'hover:bg-blue-500/20',
     },
+    split: {
+        label: 'Aufteilen',
+        icon: GitFork,
+        bgColor: 'bg-purple-500/10',
+        borderColor: 'border-purple-500/20',
+        textColor: 'text-purple-400',
+        badgeColor: 'bg-purple-500/20 text-purple-400',
+        hoverBg: 'hover:bg-purple-500/20',
+    },
     delete: {
         label: 'Löschen',
         icon: Trash2,
@@ -68,9 +73,17 @@ const actionConfig = {
         badgeColor: 'bg-rose-500/20 text-rose-400',
         hoverBg: 'hover:bg-rose-500/20',
     },
-};
+} satisfies Record<MappingAction, {
+    label: string;
+    icon: typeof Check;
+    bgColor: string;
+    borderColor: string;
+    textColor: string;
+    badgeColor: string;
+    hoverBg: string;
+}>;
 
-const actionOrder: (keyof typeof actionConfig)[] = ['keep', 'redirect', 'merge', 'delete'];
+const actionOrder = MAPPING_ACTIONS;
 
 // ============================================================================
 // SINGLE ROW COMPONENT
@@ -261,7 +274,7 @@ function MappingRow({ item, index, onUpdate, onDelete, readOnly }: MappingRowPro
                     {/* Reason */}
                     {item.reason && (
                         <p className="text-[11px] text-gray-500 mt-1 italic">
-                            "{item.reason}"
+                            &ldquo;{item.reason}&rdquo;
                         </p>
                     )}
                 </div>
@@ -314,7 +327,7 @@ export function InteractivePageMappingTable({
 
     // Stats
     const stats = useMemo(() => {
-        const counts = { keep: 0, merge: 0, redirect: 0, delete: 0 };
+        const counts: Record<MappingAction, number> = { keep: 0, merge: 0, split: 0, redirect: 0, delete: 0 };
         mapping.forEach(m => {
             if (counts[m.action] !== undefined) counts[m.action]++;
         });
@@ -420,7 +433,7 @@ export function InteractivePageMappingTable({
                 <div className="flex items-center gap-2 flex-wrap">
                     {Object.entries(stats).map(([action, count]) => {
                         if (count === 0) return null;
-                        const config = actionConfig[action as keyof typeof actionConfig];
+                        const config = actionConfig[action as MappingAction];
                         return (
                             <span
                                 key={action}

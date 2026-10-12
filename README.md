@@ -1,129 +1,117 @@
 # Web Architect AI
 
-Turn an existing website into a reviewable migration blueprint, page and component specifications, and AI-generated design directions.
+[![CI](https://github.com/JonasR-Git/web-architect-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/JonasR-Git/web-architect-ai/actions/workflows/ci.yml)
 
-**Status: experimental local prototype.** This is a workbench for exploring and reviewing a migration, with drafts and HTML mockups as outputs.
+**Make website migration reviewable.** Explore the existing structure, inspect a proposed blueprint, then turn approved decisions into page specifications and design drafts.
 
-## What it does
+[Interactive project guide](https://jonasr-git.github.io/web-architect-ai/) · [Reproducible workflow](docs/WORKFLOW_EXAMPLE.md) · [Architecture](docs/ARCHITECTURE.md)
 
-- Crawls a website with Puppeteer and extracts page structure, content, media, forms and technology signals.
-- Groups similar pages and lets you inspect and edit the resulting blueprint and content mapping.
-- Runs AI-assisted critique and migration planning, then generates page and component specifications.
-- Offers design directions and generates five HTML mockup variants through a multi-stage workflow.
-- Persists sessions and assets locally under `data/sessions`.
+Built by Jonas Fendel with TypeScript, Next.js, Puppeteer and configurable LLM workflows. **Experimental local prototype:** generated outputs are drafts for human review, not completed production migrations.
+
+## Why I built it
+
+A website migration involves decisions about existing content, URLs, reusable patterns and the target experience. A prompt that produces a new homepage leaves most of those decisions invisible.
+
+This workbench makes them inspectable. Website extraction feeds an editable blueprint; page and component specifications depend on the reviewed structure; design and implementation artifacts remain linked to that context.
+
+## Explore it in two minutes
+
+The [public guide](https://jonasr-git.github.io/web-architect-ai/) needs no installation or API key. Inspect a fictional three-page site, change its About-page target path and download the updated JSON draft.
+
+The guide's content is hand-authored sample data. It makes no model calls or crawl requests. The full local application has a separate built-in sample mode and a provider-backed mode, visibly identified in the workbench.
+
+![The running local workbench in sample mode, showing source pages and editable target mappings](docs/blueprint.png)
+
+Actual application screenshot from the sample intake-to-blueprint walkthrough. The public guide uses a separate, smaller fictional example.
+
+## What the workbench does
+
+- Extracts page structure, content, media, forms and technology signals with Puppeteer.
+- Groups similar pages and lets the user review content and URL mappings.
+- Runs critique and migration planning in parallel, then generates dependent page/component specifications.
+- Explores design directions and produces HTML mockup variants and implementation plans.
+- Persists sessions and assets in the local workspace under `data/sessions`.
 
 ```mermaid
 flowchart LR
-    A[Website URL] --> B[Crawl and extract]
-    B --> C[Critique and migration plan]
-    C --> D[Editable blueprint]
-    D --> E[Page and component specs]
-    E --> F[Design directions]
-    F --> G[HTML mockups]
-    G --> H[Implementation plan]
+  A[Website intake] --> B[Extracted structure]
+  B --> C[Critique]
+  B --> D[Migration proposal]
+  C --> E[Editable blueprint]
+  D --> E
+  E --> F[Page and component specifications]
+  F --> G[Design drafts and implementation plan]
 ```
 
 ## Run locally
 
-Use Node.js and npm compatible with the project's Next.js 16 dependency.
+Use **Node.js 22.12 or newer** and npm.
 
 ```bash
 git clone https://github.com/JonasR-Git/web-architect-ai.git
 cd web-architect-ai
 npm ci
+cp .env.example .env.local
+npm run dev -- --hostname 127.0.0.1
 ```
 
-Create `.env.local` in the repository root. For real model calls:
+Open [localhost:3000](http://localhost:3000). The example configuration enables `USE_MOCK=true`; a provider key is not needed. Follow the [sample walkthrough](docs/WORKFLOW_EXAMPLE.md), or open `/demo/index.html` for the interactive project guide served locally.
 
-```dotenv
-OPENROUTER_API_KEY=your_openrouter_api_key
-```
+For provider-backed output, set `USE_MOCK=false`, supply your own `OPENROUTER_API_KEY` and set `AI_MODEL_ID` to a model available to your account. Treat model choice as an explicit configuration decision; provider availability and pricing can change.
 
-The default model is defined in `src/lib/openai.ts`. If it is unavailable to your OpenRouter account, set `AI_MODEL_ID` to an available model before starting real AI calls.
-
-Alternatively, enable mock AI responses without a provider key:
-
-```dotenv
-USE_MOCK=true
-```
-
-Then start the application:
-
-```bash
-npm run dev
-```
-
-Open [localhost:3000](http://localhost:3000), enter a website URL and work through the analysis, blueprint and design flow. Use a site you own or are authorised to crawl. Mock AI mode concerns model responses; it should not be treated as a guarantee that crawling makes no network requests.
+Only crawl websites you own or are authorised to inspect. Keep the full application bound to localhost: authentication and a hosted multi-user storage model are not established features.
 
 ## Architecture
 
 | Layer | Implementation |
 | --- | --- |
-| Application | Next.js App Router, React and TypeScript |
-| Server workflows | Server Actions and an SSE crawl API |
-| Website intake | Puppeteer crawler and extraction logic |
-| AI orchestration | OpenRouter SDK with configurable models for analysis and generation stages |
-| Workbench | Analysis, blueprint editing, specifications and design/mockup workflows |
+| Workbench | Next.js App Router, React and TypeScript |
+| Intake | Puppeteer crawler, extraction and SSE progress |
+| Orchestration | Server Actions and configurable OpenRouter models per stage |
+| Review | Structure, mapping, content, specification and design views |
 | Persistence | Local filesystem sessions and assets |
+| Public project guide | Static HTML/CSS/JavaScript, no application backend or model key |
 
-Entry points include `src/app/actions.ts`, `src/modules/core/ai-service.ts`, `src/modules/core/persistence.ts` and `src/modules/core/views/home-view.tsx`.
-
-## Configuration
-
-`OPENROUTER_API_KEY` enables provider-backed AI calls. The implementation also recognises `USE_MOCK` and `CRAWLER_MODE`, plus model overrides for individual workflow stages.
-
-<details>
-<summary>Model override variable names</summary>
-
-- `AI_MODEL_ID`
-- `LIGHTWEIGHT_MODEL`
-- `AI_MODEL_CRITIQUE`
-- `AI_MODEL_MIGRATION`
-- `AI_MODEL_COMPONENT`
-- `AI_MODEL_CONTENT`
-- `AI_MODEL_SPECIFICATION`
-- `AI_MODEL_DESIGN`
-- `AI_MODEL_IMPLEMENTATION`
-- `AI_MODEL_MOCKUP`
-- `AI_MODEL_STYLE`
-- `MOCKUP_STAGE1_MODEL` through `MOCKUP_STAGE5_MODEL`
-- `MOCKUP_STAGE3_TEMPERATURE`
-
-Refer to the implementation for defaults and supported values. The model choice can affect quality, latency and cost.
-
-</details>
+The [architecture note](docs/ARCHITECTURE.md) explains stage dependencies, execution modes, storage and current trade-offs. Useful entry points are `src/app/actions.ts`, `src/modules/core/ai-service.ts`, `src/modules/core/persistence.ts` and `src/modules/analysis/workflows`.
 
 ## Quality checks
 
-The repository declares these checks:
-
 ```bash
-npm run lint
+npm run typecheck
+npm test
+npm run lint:focused
 npm run build
 ```
 
-To run a built application locally:
+CI runs a clean install, TypeScript checking, focused regression tests, lint on the maintained core and a sample-mode production build. Tests cover clustering and mapping behavior. The public guide's controls and the sample intake-to-blueprint flow were manually verified in a browser; those interactions are not automated in CI.
 
-```bash
-npm start
-```
+`npm run lint:all` exposes the wider legacy lint backlog. Focused lint passing is not a claim that the entire existing codebase is lint-clean. Tests and the sample flow are not a benchmark of model quality or a validation of every real-world crawl.
 
-There is currently no configured `npm test` command. An existing test-like source file does not constitute a runnable test suite. The commands above document the available checks; they are not a claim that a particular revision passed them.
+On 12 October 2026, dependency updates removed the original audit's critical and high-severity runtime findings. Five moderate transitive runtime findings remain in the image-colour dependency chain; development tooling has five high-severity findings. Check `npm audit` for the current advisory state before extending or hosting the prototype.
+
+## Configuration
+
+`.env.example` starts with safe sample settings. Server-side environment variables include:
+
+| Variable | Purpose |
+| --- | --- |
+| `USE_MOCK` | Built-in sample responses when set to `true` |
+| `OPENROUTER_API_KEY` | Your provider credential; never commit it |
+| `AI_MODEL_ID` | Default model selected for your provider account |
+| `AI_MODEL_CRITIQUE`, `AI_MODEL_MIGRATION` | Analysis-stage overrides |
+| `AI_MODEL_COMPONENT`, `AI_MODEL_SPECIFICATION` | Specification-stage overrides |
+| `AI_MODEL_DESIGN`, `AI_MODEL_IMPLEMENTATION` | Output-stage overrides |
+
+Further task and mockup-stage overrides are defined in `src/lib/openai.ts` and `src/app/actions.ts`. Local sessions and `.env.local` are ignored by Git.
 
 ## Current boundaries
 
-- Sessions are stored locally; hosted persistence and a multi-user authentication model are not established features.
-- Missing provider configuration can produce mock or fallback data. Check the active mode before interpreting output as a real analysis.
-- Crawling can be resource-intensive, and limits differ between execution paths.
-- AI-generated plans, specifications and mockups need review before being used for an actual migration.
-- The repository does not yet include an automated CI workflow, a provider configuration example file or a published licence.
+- Local sessions are inspectable and exportable, but hosted persistence and multi-user access control are not implemented.
+- The analysis workflow stops on failed or fallback critique, migration or component results. Sample mode is visibly labelled; generated artifacts still require review.
+- Real crawling can be resource-intensive; execution paths still need consistent crawl limits and broader integration coverage.
+- No controlled evaluation establishes AI quality, migration success rate or performance savings.
+- This repository is public source, with no repository-wide reuse license currently granted. Dependency and upstream component licenses remain applicable.
 
-## Suggested next steps
+## Next engineering milestones
 
-These are proposed improvements, rather than shipped capabilities:
-
-- Configure a test runner and CI checks.
-- Add `.env.example` and clearer mode indicators.
-- Publish a short demo with a reproducible example website.
-- Add consistent crawl limits and evaluation cases for blueprint and specification quality.
-- Define hosted storage and access control before deploying for multiple users.
+Add bounded crawler integration tests, consistent resource limits, a small evaluation dataset for mapping/specification quality, and a hosted storage/access-control design before considering multi-user deployment.

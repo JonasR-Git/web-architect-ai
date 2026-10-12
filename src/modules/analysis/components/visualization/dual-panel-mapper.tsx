@@ -16,54 +16,16 @@ import {
 import {
     ArrowRight, Check, Merge, Trash2, CornerDownRight, Plus, Save,
     RotateCcw, GripVertical, FileText, FolderOpen, X, Download, Sparkles, Loader2,
-    ArrowUpDown, Lock, Layers, Zap, CheckCircle2
+    ArrowUpDown, Lock, Layers, Zap, CheckCircle2, GitFork
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { MappingValidator } from '@/modules/analysis/services/mapping-validator';
-import type { MappingValidationResult, SourcePage } from '@/types';
+import type { MappingAction, MappingValidationResult, SourcePage, TargetSlot } from '@/types';
+import { MAPPING_ACTIONS } from '@/modules/analysis/utils/mapping-actions';
 import { ValidationModal } from './validation-modal';
 
-// ============================================================================
-// TYPES
-// ============================================================================
-
-export interface SectionImage {
-    src: string;
-    status: 'mandatory' | 'optional';
-}
-
-export interface TargetSlot {
-    id: string;
-    path: string;
-    label: string;
-    action: 'keep' | 'redirect' | 'merge' | 'delete';
-    type?: 'page' | 'layout'; // Page or Global Layout entry
-    sourceIds: string[]; // Which sources are connected
-    description?: string; // AI generated description/specs
-    content_goals?: string[]; // AI generated content goals
-    sections?: {
-        type: string;
-        title: string;
-        content_hint: string;
-        // Draft Content
-        headline?: string;
-        content?: string;
-        images?: SectionImage[];
-    }[];
-    logos?: SectionImage[]; // Global assets for layouts
-    language?: string; // New: Language variant (e.g. 'de', 'en')
-    canonical?: string;
-    hreflangs?: { lang: string; url: string }[];
-    // Iterative Workflow Fields
-    user_prompt?: string;
-    dependencies?: string[];
-    dependencies_detected?: boolean;
-    sourceDetails?: any[]; // Enriched context for regeneration
-    previousState?: TargetSlot;
-    lastGeneratedAt?: number;
-    lastModifiedAt?: number;
-}
+export type { SectionImage, TargetSlot } from '@/types';
 
 interface DualPanelMapperProps {
     sources: SourcePage[];
@@ -80,8 +42,9 @@ const actionConfig = {
     keep: { label: 'Beibehalten', color: 'emerald', icon: Check },
     redirect: { label: 'Umleiten', color: 'blue', icon: CornerDownRight },
     merge: { label: 'Zusammenführen', color: 'amber', icon: Merge },
+    split: { label: 'Aufteilen', color: 'purple', icon: GitFork },
     delete: { label: 'Löschen', color: 'rose', icon: Trash2 },
-};
+} satisfies Record<MappingAction, { label: string; color: string; icon: typeof Check }>;
 
 // ============================================================================
 // SHARED STYLES
@@ -215,9 +178,8 @@ function DroppableTarget({
     };
 
     const cycleAction = () => {
-        const actions: TargetSlot['action'][] = ['keep', 'redirect', 'merge', 'delete'];
-        const idx = actions.indexOf(target.action);
-        onActionChange(target.id, actions[(idx + 1) % actions.length]);
+        const idx = MAPPING_ACTIONS.indexOf(target.action);
+        onActionChange(target.id, MAPPING_ACTIONS[(idx + 1) % MAPPING_ACTIONS.length]);
     };
 
     return (
@@ -388,7 +350,7 @@ function ConnectionLines({
     const containerRect = containerRef.current.getBoundingClientRect();
     const paths: any[] = [];
 
-    const colors = ['emerald', 'blue', 'amber', 'rose'];
+    const colors = ['emerald', 'blue', 'amber', 'purple', 'rose'];
 
     targets.forEach(target => {
         const targetEl = targetRefs.current.get(target.id);
@@ -541,7 +503,7 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
             }
 
             // 2. Check Redirect vs Keep for single source
-            if (t.sourceIds.length === 1 && t.action !== 'delete') {
+            if (t.sourceIds.length === 1 && t.action !== 'delete' && t.action !== 'split') {
                 const source = sources.find(s => s.id === t.sourceIds[0]);
                 if (source) {
                     const sPath = getPathFromUrl(source.url);
@@ -713,7 +675,7 @@ export function DualPanelMapper({ sources, initialTargets, onSave, onGenerateSpe
             // Actually, if we rename a 'merge', it stays 'merge'? Yes.
             // But if we rename a 'keep', it might become 'redirect'.
 
-            if (t.sourceIds.length === 1) {
+            if (t.sourceIds.length === 1 && (t.action === 'keep' || t.action === 'redirect')) {
                 const sourceObj = sources.find(s => s.id === t.sourceIds[0]);
                 const sourcePath = getPathFromUrl(sourceObj?.url || '');
                 const targetPath = getPathFromUrl(path);

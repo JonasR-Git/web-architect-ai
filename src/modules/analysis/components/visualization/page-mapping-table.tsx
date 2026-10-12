@@ -2,15 +2,8 @@
 
 import { useMemo } from 'react';
 import { cn } from '@/lib/utils';
-import { ArrowRight, Check, Merge, Trash2, CornerDownRight, AlertCircle } from 'lucide-react';
-
-interface PageMapping {
-    old_url: string;
-    new_path: string;
-    action: 'keep' | 'merge' | 'redirect' | 'delete';
-    reason?: string;
-    merged_with?: string | null;
-}
+import { ArrowRight, Check, Merge, Trash2, CornerDownRight, AlertCircle, GitFork } from 'lucide-react';
+import type { MappingAction, PageMapping } from '@/types';
 
 interface PageMappingTableProps {
     mapping: PageMapping[];
@@ -41,6 +34,14 @@ const actionConfig = {
         textColor: 'text-blue-400',
         badgeColor: 'bg-blue-500/20 text-blue-400',
     },
+    split: {
+        label: 'Aufgeteilt',
+        icon: GitFork,
+        bgColor: 'bg-purple-500/10',
+        borderColor: 'border-purple-500/20',
+        textColor: 'text-purple-400',
+        badgeColor: 'bg-purple-500/20 text-purple-400',
+    },
     delete: {
         label: 'Entfernt',
         icon: Trash2,
@@ -49,12 +50,19 @@ const actionConfig = {
         textColor: 'text-rose-400',
         badgeColor: 'bg-rose-500/20 text-rose-400',
     },
-};
+} satisfies Record<MappingAction, {
+    label: string;
+    icon: typeof Check;
+    bgColor: string;
+    borderColor: string;
+    textColor: string;
+    badgeColor: string;
+}>;
 
 export function PageMappingTable({ mapping }: PageMappingTableProps) {
     // Group merged pages by their target
     const groupedMapping = useMemo(() => {
-        const groups: { target: string; items: PageMapping[]; action: string }[] = [];
+        const groups: { target: string; items: PageMapping[]; action: MappingAction }[] = [];
         const processed = new Set<number>();
 
         mapping.forEach((item, index) => {
@@ -91,7 +99,7 @@ export function PageMappingTable({ mapping }: PageMappingTableProps) {
 
     // Count by action
     const stats = useMemo(() => {
-        const counts = { keep: 0, merge: 0, redirect: 0, delete: 0 };
+        const counts: Record<MappingAction, number> = { keep: 0, merge: 0, split: 0, redirect: 0, delete: 0 };
         mapping.forEach(m => {
             if (counts[m.action] !== undefined) counts[m.action]++;
         });
@@ -118,7 +126,7 @@ export function PageMappingTable({ mapping }: PageMappingTableProps) {
                 <div className="flex items-center gap-2">
                     {Object.entries(stats).map(([action, count]) => {
                         if (count === 0) return null;
-                        const config = actionConfig[action as keyof typeof actionConfig];
+                        const config = actionConfig[action as MappingAction];
                         return (
                             <span
                                 key={action}
@@ -137,7 +145,7 @@ export function PageMappingTable({ mapping }: PageMappingTableProps) {
             {/* Mapping List */}
             <div className="divide-y divide-white/5 max-h-[500px] overflow-y-auto custom-scrollbar">
                 {groupedMapping.map((group, groupIndex) => {
-                    const config = actionConfig[group.action as keyof typeof actionConfig];
+                    const config = actionConfig[group.action];
                     const Icon = config.icon;
                     const isMergeGroup = group.items.length > 1;
 
@@ -200,7 +208,7 @@ export function PageMappingTable({ mapping }: PageMappingTableProps) {
 
                                             {item.reason && (
                                                 <p className="text-[11px] text-gray-500 mt-1 italic">
-                                                    "{item.reason}"
+                                                    &ldquo;{item.reason}&rdquo;
                                                 </p>
                                             )}
                                         </div>
@@ -211,7 +219,7 @@ export function PageMappingTable({ mapping }: PageMappingTableProps) {
                             {/* Shared reason for merge groups */}
                             {isMergeGroup && group.items[0]?.reason && (
                                 <p className="text-[11px] text-gray-500 mt-2 pl-6 italic border-t border-white/5 pt-2">
-                                    "{group.items[0].reason}"
+                                    &ldquo;{group.items[0].reason}&rdquo;
                                 </p>
                             )}
                         </div>

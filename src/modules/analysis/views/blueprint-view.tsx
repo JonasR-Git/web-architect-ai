@@ -118,7 +118,7 @@ export function BlueprintView({
               </div>
               <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
                 <div className="text-2xl font-bold text-amber-400">
-                  {migrationPlan.page_mapping?.filter((m: PageMapping) => m.action === 'merge' || m.action === 'redirect').length || 0}
+                  {migrationPlan.page_mapping?.filter((m: PageMapping) => m.action === 'merge' || m.action === 'split' || m.action === 'redirect').length || 0}
                 </div>
                 <div className="text-[10px] text-gray-500 uppercase tracking-widest mt-1">Geändert</div>
               </div>

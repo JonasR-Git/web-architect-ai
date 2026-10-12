@@ -282,21 +282,25 @@ export interface AIResponseMetadata {
     duration: string;
 }
 
+export type MappingAction = 'keep' | 'redirect' | 'merge' | 'split' | 'delete';
+export type PatternMappingAction = Exclude<MappingAction, 'split'>;
+
 export interface PageMapping {
     old_url: string;
     new_path: string;
-    action: 'keep' | 'redirect' | 'merge' | 'delete';
+    action: MappingAction;
     reason?: string;
     description?: string;
     type?: 'page' | 'layout';
     content_goals?: string[];
     sections?: any[];
+    merged_with?: string | null;
 }
 
 export interface PatternMapping {
     pattern: string;
     target_base: string;
-    action: 'keep' | 'redirect' | 'merge' | 'delete';
+    action: PatternMappingAction;
     reason?: string;
     description?: string;
     type?: 'page' | 'layout';
@@ -372,7 +376,7 @@ export interface TargetSlot {
     path: string;
     label: string;
     type?: 'page' | 'layout';
-    action: 'keep' | 'redirect' | 'merge' | 'delete';
+    action: MappingAction;
     sourceIds: string[];
     description?: string;
     content_goals?: string[];
@@ -434,7 +438,7 @@ export interface MappingValidationResult {
 export interface AutoMappingSuggestion {
     sourceId: string;
     suggestedPath: string;
-    action: 'keep' | 'redirect' | 'merge';
+    action: Exclude<MappingAction, 'delete'>;
     reason: string;
     existingTargetId?: string; // If set, add source to this existing target instead of creating new one
 }

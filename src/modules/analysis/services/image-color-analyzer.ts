@@ -217,7 +217,7 @@ export class ImageColorAnalyzer {
      * @returns Array of hex colors
      */
     private static async extractRegionColors(
-        image: sharp.Sharp,
+        image: ReturnType<typeof sharp>,
         region: { left: number; top: number; width: number; height: number },
         count: number = 3
     ): Promise<string[]> {

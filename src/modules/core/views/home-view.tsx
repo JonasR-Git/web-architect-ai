@@ -1,4 +1,5 @@
 import { Button } from '@/components/ui/button';
+import Link from 'next/link';
 import { ProcessLog } from '@/modules/engineering/components/process-log';
 import { RefreshCw, ArrowRight, Search, History, FolderOpen } from 'lucide-react';
 import { LogEntry, TokenStats, CrawlStats } from '@/types';
@@ -45,26 +46,29 @@ export function HomeView({
       <div className="lg:col-span-5 flex flex-col justify-center items-center">
         <div className="w-full max-w-lg space-y-6">
           <div className="space-y-2 text-center">
-            <h1 className="text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-purple-400 to-emerald-400 animate-in fade-in slide-in-from-bottom-3">
+            <h1 className="text-4xl font-bold text-white">
               Web Architect AI
             </h1>
-            <p className="text-zinc-400 text-sm">Autonomous v3.0 Migration Agent</p>
+            <p className="text-zinc-400 text-sm">A local workbench for website migration.</p>
+            <p className="text-zinc-400 text-sm leading-relaxed">Explore the source, review the blueprint and turn approved decisions into page specifications and design drafts.</p>
+            <Link href="/demo" className="inline-block text-sm text-blue-300 underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-blue-300">Take the two-minute project tour</Link>
           </div>
 
           {/* Input Card */}
           <div className="p-6 bg-zinc-900/50 border border-white/10 rounded-2xl backdrop-blur-xl shadow-2xl space-y-4">
             <div className="space-y-2">
-              <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider ml-1">
+              <label htmlFor="website-url" className="text-xs font-semibold text-zinc-400 ml-1">
                 Target Website URL
               </label>
               <div className="relative">
                 <input
                   type="url"
+                  id="website-url"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
                   placeholder="https://example.com"
                   className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 pl-11 text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all font-mono text-sm placeholder:text-zinc-700"
-                  onKeyDown={(e) => e.key === 'Enter' && onStartCrawl()}
+                  onKeyDown={(e) => e.key === 'Enter' && !isProcessing && url && onStartCrawl()}
                 />
                 <Search className="absolute left-4 top-3.5 w-4 h-4 text-zinc-600" />
               </div>

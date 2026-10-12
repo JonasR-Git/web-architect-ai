@@ -1,20 +1,16 @@
 import { useMemo } from 'react';
 import { MigrationPlan, TargetSlot } from '@/types';
+import { normalizeMappingAction, normalizePatternMappingAction } from '@/modules/analysis/utils/mapping-actions';
 import { ID_PREFIXES } from '@/modules/core/constants/ids';
 
-/**
- * Hook for reconstructing target slots from migration plan
- * Used when generating page specs from the migration plan
- */
-export function useTargetReconstruction(
+export function reconstructTargets(
   migrationPlan: MigrationPlan | null
 ): TargetSlot[] {
-  return useMemo(() => {
-    if (!migrationPlan?.page_mapping && !migrationPlan?.pattern_mapping) {
-      return [];
-    }
+  if (!migrationPlan?.page_mapping && !migrationPlan?.pattern_mapping) {
+    return [];
+  }
 
-    const targetMap = new Map<string, TargetSlot>();
+  const targetMap = new Map<string, TargetSlot>();
 
     // 1. Initialize from sitemap to catch all structural targets (including layout)
     migrationPlan.sitemap?.forEach((s: any) => {
@@ -39,7 +35,7 @@ export function useTargetReconstruction(
           path: key,
           label: key,
           type: (pm.type === 'layout' || pm.type === 'page') ? pm.type : 'page',
-          action: (pm.action === 'keep' || pm.action === 'redirect' || pm.action === 'merge' || pm.action === 'delete') ? pm.action : 'redirect',
+          action: normalizePatternMappingAction(pm.action),
           sourceIds: [],
         });
       }
@@ -54,16 +50,25 @@ export function useTargetReconstruction(
           path: m.new_path,
           label: m.new_path,
           type: (m.type === 'layout' || m.type === 'page') ? m.type : 'page',
-          action: (m.action === 'keep' || m.action === 'redirect' || m.action === 'merge' || m.action === 'delete') ? m.action : 'redirect',
+          action: normalizeMappingAction(m.action),
           sourceIds: [],
         });
       }
       const target = targetMap.get(key)!;
       target.sourceIds.push(`source-${i}`);
-      if (m.action && (m.action === 'keep' || m.action === 'redirect' || m.action === 'merge' || m.action === 'delete')) target.action = m.action;
+      target.action = normalizeMappingAction(m.action, target.action);
       if (m.type && (m.type === 'layout' || m.type === 'page')) target.type = m.type;
     });
 
-    return Array.from(targetMap.values());
-  }, [migrationPlan]);
+  return Array.from(targetMap.values());
+}
+
+/**
+ * Hook for reconstructing target slots from migration plan
+ * Used when generating page specs from the migration plan
+ */
+export function useTargetReconstruction(
+  migrationPlan: MigrationPlan | null
+): TargetSlot[] {
+  return useMemo(() => reconstructTargets(migrationPlan), [migrationPlan]);
 }

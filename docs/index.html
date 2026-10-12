@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Web Architect AI — Website migration, made reviewable</title>
+  <meta name="description" content="A local AI-assisted workbench for reviewing website structure, migration decisions and implementation specifications. Explore a transparent, synthetic example.">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./tour.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="wordmark" href="#main">Web Architect AI</a>
+    <nav aria-label="Main navigation"><a href="#tour">Explore the workflow</a><a href="#architecture">Architecture</a><a href="https://github.com/JonasR-Git/web-architect-ai">Source on GitHub</a></nav>
+  </header>
+  <main id="main">
+    <section class="intro">
+      <div class="intro-copy">
+        <h1>Make the migration<br>reviewable.</h1>
+        <p class="lead">An existing website is more than a list of URLs. Web Architect AI helps turn its structure and content into decisions you can inspect, edit and carry into implementation.</p>
+        <p>Built by <a href="https://github.com/JonasR-Git">Jonas Fendel</a>. TypeScript, Next.js, Puppeteer and configurable LLM workflows. An experimental local workbench.</p>
+        <a class="button" href="#tour">Try the interactive guide</a>
+        <a class="text-link" href="https://github.com/JonasR-Git/web-architect-ai#run-locally">Run the workbench locally</a>
+      </div>
+      <div class="migration-map" aria-label="Three source pages map to an editable target blueprint">
+        <div class="map-heading">From source pages to a deliberate blueprint</div>
+        <div class="map-columns"><span>Existing site</span><span>Proposed structure</span></div>
+        <div class="map-row"><span>/</span><span class="connection" aria-hidden="true"></span><span>/</span></div>
+        <div class="map-row"><span>/about</span><span class="connection" aria-hidden="true"></span><span>/studio <small>Review rename</small></span></div>
+        <div class="map-row"><span>/contact</span><span class="connection" aria-hidden="true"></span><span>/contact</span></div>
+        <p class="map-note">Every proposed change stays visible. A draft is a starting point for a decision.</p>
+      </div>
+    </section>
+    <section id="tour" class="tour-section" aria-labelledby="tour-title">
+      <div class="section-heading"><div><h2 id="tour-title">Follow one small migration.</h2><p>A fictional studio site. All content and results here are hand-authored sample data; this guide makes no model calls and does not crawl websites.</p></div><span class="sample-label">Interactive guide · Sample data</span></div>
+      <div class="tour-tabs" role="tablist" aria-label="Migration steps">
+        <button id="tab-source" type="button" role="tab" aria-selected="true" aria-controls="panel-source" tabindex="0">1. Inspect the source</button>
+        <button id="tab-blueprint" type="button" role="tab" aria-selected="false" aria-controls="panel-blueprint" tabindex="-1">2. Review the blueprint</button>
+        <button id="tab-output" type="button" role="tab" aria-selected="false" aria-controls="panel-output" tabindex="-1">3. Export a draft</button>
+      </div>
+      <div id="panel-source" class="tour-panel" role="tabpanel" aria-labelledby="tab-source" tabindex="0">
+        <div><h3>Understand what already exists.</h3><p>The workbench extracts navigation, content, media and page signals. Similar pages can be grouped before an AI workflow proposes a migration.</p><p>In this guide, the source is a three-page fictional studio website. Select a page to see its content purpose.</p></div>
+        <div><div class="source-list" aria-label="Sample source pages"><button type="button" data-page="0" aria-pressed="true"><span>/</span><strong>Home</strong></button><button type="button" data-page="1" aria-pressed="false"><span>/about</span><strong>About</strong></button><button type="button" data-page="2" aria-pressed="false"><span>/contact</span><strong>Contact</strong></button></div><p id="page-description" class="source-description" aria-live="polite">Introduces the studio and its services, with a clear route to contact.</p></div>
+      </div>
+      <div id="panel-blueprint" class="tour-panel" role="tabpanel" aria-labelledby="tab-blueprint" tabindex="0" hidden>
+        <div><h3>Keep the decision with the human.</h3><p>Review the proposed target paths and content roles. The real workbench supports page mapping, clustering and content review.</p><p>This sample proposes renaming the About page. Edit its path below; the exported draft will reflect your decision.</p></div>
+        <div class="blueprint-form"><label for="about-path">Target path for /about</label><input id="about-path" type="text" value="/studio" maxlength="80" aria-describedby="path-help path-status"><p id="path-help">Use a path beginning with /, such as /studio or /about.</p><p id="path-status" role="status">The draft proposes /about to /studio. Review the redirect before shipping.</p><dl><div><dt>Home</dt><dd>Service overview</dd></div><div><dt>About</dt><dd>Studio story and approach</dd></div><div><dt>Contact</dt><dd>Contact details and enquiry</dd></div></dl></div>
+      </div>
+      <div id="panel-output" class="tour-panel" role="tabpanel" aria-labelledby="tab-output" tabindex="0" hidden>
+        <div><h3>Leave with a concrete draft.</h3><p>The workbench produces page and component specifications, design directions, HTML mockups and implementation plans. Generated outputs still need engineering review.</p><p>This guide exports a small JSON blueprint. It is an illustrative review artifact, not a production migration.</p><button id="download" type="button" class="button">Download sample blueprint</button></div>
+        <pre id="sample-output" aria-label="Sample JSON blueprint"></pre>
+      </div>
+      <noscript><p>The guide needs JavaScript for its controls. You can still read the project description and inspect the source on GitHub.</p></noscript>
+    </section>
+    <section class="screenshots" aria-labelledby="workbench-title">
+      <h2 id="workbench-title">Inside the actual workbench.</h2>
+      <p>The guide above uses its own small fictional example. This screenshot shows the running application with its built-in sample responses.</p>
+      <figure><img src="./blueprint.png" alt="The local Web Architect AI workbench in sample mode, with source pages on the left and editable target mappings on the right." width="2945" height="1505" loading="lazy"><figcaption>Source-to-target mapping after sample intake and analysis. The sample-mode notice remains visible; these are illustrative results, not a completed production migration.</figcaption></figure>
+    </section>
+    <section id="architecture" class="architecture-section">
+      <h2>A local workflow with explicit review points.</h2>
+      <div class="architecture"><div><strong>Intake</strong><p>Puppeteer crawler and page extraction</p></div><div><strong>Analysis</strong><p>Parallel critique and migration planning</p></div><div><strong>Review</strong><p>Editable mappings, content and specifications</p></div><div><strong>Output</strong><p>Design drafts and implementation artifacts</p></div></div>
+      <div class="architecture-notes"><p><strong>Why local storage?</strong> Sessions and assets stay in the local workspace. It keeps the prototype inspectable and easy to export; it is not a multi-user hosted service.</p><p><strong>Why staged AI workflows?</strong> Critique and migration can run in parallel, while component and page specifications depend on the reviewed structure. Models are configurable by stage.</p></div>
+    </section>
+    <section class="boundaries"><h2>What this project demonstrates.</h2><p>Full-stack workflow design, website extraction, configurable LLM orchestration and human review of generated artifacts. It does not demonstrate completed production migrations, autonomous deployment or a validated benchmark of AI quality.</p><p>The default local sample mode uses built-in responses. Provider-backed execution requires your own configuration; real crawling should be limited to websites you own or are authorised to inspect.</p></section>
+    <footer><p>Jonas Fendel · Product &amp; AI Engineer</p><a href="https://github.com/JonasR-Git/web-architect-ai">Inspect the implementation</a><a href="https://fero-solutions.de">More work</a></footer>
+  </main>
+</body>
+</html>

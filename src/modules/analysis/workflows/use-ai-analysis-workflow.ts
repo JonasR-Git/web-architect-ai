@@ -7,6 +7,7 @@ import {
   generateMigrationAction,
   generateComponentLibraryAction,
 } from '@/app/actions';
+import { requireSuccessfulAIStageResult } from '@/modules/analysis/workflows/ai-stage-result';
 
 export interface AIAnalysisWorkflowDependencies {
   structure: SiteStructure | null;
@@ -69,6 +70,8 @@ export function useAIAnalysisWorkflow(
     setView('ai_analysis');
     addLog('--- STARTING AI ANALYSIS ---');
 
+    let completed = false;
+
     try {
       // === RUN CRITIQUE + MIGRATION IN PARALLEL ===
       setCurrentStep('Analyzing Structure & Strategy...');
@@ -91,24 +94,15 @@ export function useAIAnalysisWorkflow(
       // Wait for all parallel requests
       const [auditRes, migRes] = await Promise.all([auditPromise, migrationPromise]);
 
-      // Process Audit result
-      if (!auditRes.success)
-        addLog(
-          `AI WARNING: Audit failed (${auditRes.error}). Using fallback data.`,
-          'warning'
-        );
-      setCritique(auditRes.data);
-      const auditMeta = auditRes.data?._meta;
+      // Keep stage results local until every required stage has succeeded.
+      // Sample-mode results are valid successes; provider fallback data is not.
+      const audit = requireSuccessfulAIStageResult('Audit', auditRes);
+      const migrationPlan = requireSuccessfulAIStageResult('Migration', migRes);
+
+      const auditMeta = audit?._meta;
       addLog(`AI [${auditMeta?.model || 'unknown'}]: Audit complete.`, 'success', auditMeta);
 
-      // Process Migration result
-      if (!migRes.success)
-        addLog(
-          `AI WARNING: Migration failed (${migRes.error}). Using fallback data.`,
-          'warning'
-        );
-      setMigrationPlan(migRes.data);
-      const migMeta = (migRes.data as any)?._meta;
+      const migMeta = (migrationPlan as any)?._meta;
       addLog(
         `AI [${migMeta?.model || 'unknown'}]: Migration strategy ready.`,
         'success',
@@ -119,32 +113,35 @@ export function useAIAnalysisWorkflow(
       setCurrentStep('Extracting Component Library...');
       addLog('AI: Extracting Component Pattern Library...');
       const compRes = await generateComponentLibraryAction(
-        migRes.data,
+        migrationPlan,
         structure,
         userInstructions,
         stackConfig,
-        auditRes.data,
+        audit,
         clusterOverrides,
         semanticMerges
       );
-      if (!compRes.success)
-        addLog(
-          `AI WARNING: Component extraction failed (${compRes.error}). Using fallback data.`,
-          'warning'
-        );
-      setComponentSpec(compRes.data);
-      const compMeta = compRes.data?._meta;
+      const componentSpec = requireSuccessfulAIStageResult('Component extraction', compRes);
+      const compMeta = componentSpec?._meta;
       addLog(`AI [${compMeta?.model || 'unknown'}]: Components defined.`, 'success', compMeta);
 
+      // Commit the blueprint atomically only after all required stages pass.
+      setCritique(audit);
+      setMigrationPlan(migrationPlan);
+      setComponentSpec(componentSpec);
+
+      completed = true;
       toast.success('AI Analysis Complete');
       setView('ai_result');
-    } catch (e: any) {
-      addLog(`AI ERROR: ${e.message}`, 'error');
-      toast.error('AI Analysis failed');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unexpected AI workflow error';
+      setCurrentStep('Analysis stopped. Review the error below.');
+      addLog(`AI ERROR: ${message}`, 'error');
+      toast.error('AI Analysis stopped');
       // Stay on analysis view so they can see logs or retry
     } finally {
       setIsProcessing(false);
-      setCurrentStep('');
+      if (completed) setCurrentStep('');
     }
   }, [
     structure,

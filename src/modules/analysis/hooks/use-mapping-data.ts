@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { SiteStructure, MigrationPlan, ClusterOverrides, SourcePage, TargetSlot } from '@/types';
 import { groupSimilarPages } from '@/modules/core/utils/grouping';
-import { buildIdLookup, resolveSourceId } from '@/modules/analysis/utils/mapping-ids';
+import { normalizeMappingAction, normalizePatternMappingAction } from '@/modules/analysis/utils/mapping-actions';
+import { buildIdLookup, normalizeUrlForMatching, resolveSourceId } from '@/modules/analysis/utils/mapping-ids';
 import { ID_PREFIXES } from '@/modules/core/constants/ids';
 
 export interface MappingDataResult {
@@ -101,6 +102,7 @@ export function useMappingData(
 
       const key = normalizePath(rawPath);
       const sourceId = resolveSourceId(pm.pattern, lookup);
+      const action = normalizePatternMappingAction(pm.action);
 
       if (!targetMap.has(key)) {
         targetMap.set(key, {
@@ -108,13 +110,14 @@ export function useMappingData(
           path: key,
           label: key,
           type: pm.type || 'page',
-          action: pm.action || 'redirect',
+          action,
           sourceIds: sourceId ? [sourceId] : [],
           description: pm.reason
         });
-      } else if (sourceId) {
+      } else {
         const target = targetMap.get(key)!;
-        if (!target.sourceIds.includes(sourceId)) {
+        target.action = action;
+        if (sourceId && !target.sourceIds.includes(sourceId)) {
           target.sourceIds.push(sourceId);
         }
       }
@@ -128,6 +131,10 @@ export function useMappingData(
       const sourceId = m.old_url ? resolveSourceId(m.old_url, lookup) : null;
 
       key = resolveDeduplicatedKey(key);
+      const fallbackAction = m.old_url && normalizeUrlForMatching(m.old_url) === normalizeUrlForMatching(key)
+        ? 'keep'
+        : 'redirect';
+      const action = normalizeMappingAction(m.action, fallbackAction);
 
       if (!targetMap.has(key)) {
         targetMap.set(key, {
@@ -135,13 +142,14 @@ export function useMappingData(
           path: key,
           label: key,
           type: m.type || 'page',
-          action: m.action || 'keep',
+          action,
           sourceIds: sourceId ? [sourceId] : [],
           description: m.reason || m.description
         });
-      } else if (sourceId) {
+      } else {
         const target = targetMap.get(key)!;
-        if (!target.sourceIds.includes(sourceId)) {
+        target.action = action;
+        if (sourceId && !target.sourceIds.includes(sourceId)) {
           target.sourceIds.push(sourceId);
         }
       }
